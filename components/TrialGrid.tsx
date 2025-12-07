@@ -1,51 +1,59 @@
-import { MOCK_TRIALS } from "@/lib/mockData";
+"use client"; // Client-side for now to keep it simple
+
+import { useEffect, useState } from "react";
+import { supabase } from "@/lib/supabase";
 import TrialCard from "./TrialCard";
 
-interface TrialGridProps {
-  searchQuery: string;
+// Define what a Trial looks like in the DB
+interface Trial {
+  id: string;
+  title: string;
+  condition: string;
+  location: string;
+  compensation: string;
+  status: "Recruiting" | "Full"; // Cast string to union type if needed
+  tags: string[];
 }
 
-export default function TrialGrid({ searchQuery }: TrialGridProps) {
-  
-  // LOGIC: Filter the trials based on the search query
-  const filteredTrials = MOCK_TRIALS.filter((trial) => {
-    const query = searchQuery.toLowerCase();
-    return (
-      trial.condition.toLowerCase().includes(query) ||
-      trial.title.toLowerCase().includes(query) ||
-      trial.tags.some(tag => tag.toLowerCase().includes(query))
-    );
-  });
+export default function TrialGrid({ searchQuery }: { searchQuery: string }) {
+  const [trials, setTrials] = useState<Trial[]>([]);
+  const [loading, setLoading] = useState(true);
+
+  useEffect(() => {
+    async function fetchTrials() {
+      setLoading(true);
+
+      let query = supabase.from('trials').select('*');
+
+      if (searchQuery) {
+        // Simple search: checks if condition matches
+        query = query.ilike('condition', `%${searchQuery}%`);
+      }
+
+      const { data, error } = await query;
+
+      if (data) {
+        // Supabase returns 'status' as string, but our card expects specific text.
+        // In a real app we'd validate this. For now, we cast it.
+        setTrials(data as unknown as Trial[]);
+      }
+      setLoading(false);
+    }
+
+    fetchTrials();
+  }, [searchQuery]);
+
+  if (loading) return <div className="text-center py-20">Loading trials...</div>;
 
   return (
     <section className="py-24 bg-slate-50">
       <div className="mx-auto max-w-7xl px-6">
-        
-        {/* Header */}
-        <div className="mb-12 flex items-end justify-between">
-          <div>
-            <h2 className="text-3xl font-bold tracking-tight text-slate-900 sm:text-4xl">
-              Featured Opportunities
-            </h2>
-            <p className="mt-4 text-lg text-slate-600">
-              Showing {filteredTrials.length} result{filteredTrials.length !== 1 && 's'} for <span className="font-semibold text-indigo-600">"{searchQuery || 'All Conditions'}"</span>
-            </p>
-          </div>
+        <h2 className="text-3xl font-bold mb-12">Featured Opportunities</h2>
+        <div className="grid gap-8 sm:grid-cols-2 lg:grid-cols-3">
+          {trials.map((trial) => (
+            <TrialCard key={trial.id} trial={trial} />
+          ))}
         </div>
-
-        {/* The Grid: Maps through the FILTERED list, not the full list */}
-        {filteredTrials.length > 0 ? (
-          <div className="grid gap-8 sm:grid-cols-2 lg:grid-cols-3">
-            {filteredTrials.map((trial) => (
-              <TrialCard key={trial.id} trial={trial} />
-            ))}
-          </div>
-        ) : (
-          <div className="text-center py-20 bg-white rounded-2xl border border-dashed border-slate-300">
-            <p className="text-slate-500">No trials found for "{searchQuery}". Try searching "Acne" or "Eczema".</p>
-          </div>
-        )}
-
       </div>
     </section>
   );

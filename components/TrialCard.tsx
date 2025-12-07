@@ -1,5 +1,16 @@
+import Link from "next/link"; // <--- THIS IMPORT IS CRITICAL
 import { MapPin, DollarSign, ArrowRight } from "lucide-react";
-import { Trial } from "@/lib/mockData";
+
+// We define the shape of the data so TypeScript is happy
+interface Trial {
+  id: string;
+  title: string;
+  condition: string;
+  location: string;
+  compensation: string;
+  status: string; // Changed to string to be flexible with Supabase
+  tags: string[];
+}
 
 export default function TrialCard({ trial }: { trial: Trial }) {
   return (
@@ -41,18 +52,21 @@ export default function TrialCard({ trial }: { trial: Trial }) {
 
         {/* Tags */}
         <div className="flex flex-wrap gap-2 pt-2">
-          {trial.tags.map((tag) => (
+          {trial.tags && trial.tags.map((tag) => (
             <span key={tag} className="text-[10px] font-medium text-slate-400 border border-slate-100 px-2 py-1 rounded-md bg-slate-50">
               {tag}
             </span>
           ))}
         </div>
 
-        {/* Button */}
-        <button className="mt-4 flex w-full items-center justify-center gap-2 rounded-xl bg-slate-900 py-3 text-sm font-semibold text-white transition-all hover:bg-indigo-600">
+        {/* ACTION BUTTON: This is now a Link, not a button */}
+        <Link 
+          href={`/trial/${trial.id}`}
+          className="mt-4 flex w-full items-center justify-center gap-2 rounded-xl bg-slate-900 py-3 text-sm font-semibold text-white transition-all hover:bg-indigo-600"
+        >
           View Details
           <ArrowRight className="h-4 w-4" />
-        </button>
+        </Link>
       </div>
     </div>
   );
