@@ -1,33 +1,31 @@
 import { NextRequest, NextResponse } from 'next/server';
 
 export const config = {
-  // Protects the entire site (Home, Search, Admin, etc.)
   matcher: '/:path*',
 };
 
 export function middleware(req: NextRequest) {
-  // 1. Allow public access to assets (images, fonts, api) so the site doesn't break
-  // BUT block access to the actual pages
-  const isPublicFile = req.nextUrl.pathname.includes('.') || req.nextUrl.pathname.startsWith('/api');
-  if (isPublicFile) {
+  // 1. Bypass check for public files (images, api, etc.)
+  if (req.nextUrl.pathname.includes('.') || req.nextUrl.pathname.startsWith('/api')) {
     return NextResponse.next();
   }
 
-  // 2. Bypass password on Localhost (Development)
+  // 2. Bypass check for Localhost
   if (process.env.NODE_ENV === 'development') {
     return NextResponse.next();
   }
 
-  // 3. CHECK FOR PASSWORD
+  // 3. Check for Password
   const basicAuth = req.headers.get('authorization');
 
   if (basicAuth) {
     const authValue = basicAuth.split(' ')[1];
-    // Decode "user:password"
     const [user, pwd] = atob(authValue).split(':');
 
-    // Check against Environment Variables
-    if (user === process.env.BASIC_AUTH_USER && pwd === process.env.BASIC_AUTH_PASSWORD) {
+    // --- HARDCODED CREDENTIALS (NO SETTINGS REQUIRED) ---
+    // User: admin
+    // Pass: password
+    if (user === 'admin' && pwd === 'UniversalB0ard14!') {
       return NextResponse.next();
     }
   }
