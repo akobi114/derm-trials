@@ -18,13 +18,13 @@ export default function Navbar() {
 
         {/* Desktop Navigation links */}
         <div className="hidden items-center gap-8 md:flex">
-          <Link href="#" className="text-sm font-medium text-slate-600 hover:text-indigo-600 transition-colors">
+          <Link href="/condition/psoriasis" className="text-sm font-medium text-slate-600 hover:text-indigo-600 transition-colors">
             Find a Trial
           </Link>
-          <Link href="#" className="text-sm font-medium text-slate-600 hover:text-indigo-600 transition-colors">
+          <Link href="/condition/psoriasis" className="text-sm font-medium text-slate-600 hover:text-indigo-600 transition-colors">
             Conditions
           </Link>
-          <Link href="#" className="text-sm font-medium text-slate-600 hover:text-indigo-600 transition-colors">
+          <Link href="/condition/psoriasis" className="text-sm font-medium text-slate-600 hover:text-indigo-600 transition-colors">
             For Researchers
           </Link>
         </div>
