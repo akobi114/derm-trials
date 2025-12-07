@@ -4,7 +4,6 @@ import { ArrowLeft, CheckCircle } from "lucide-react";
 import Link from "next/link";
 import { notFound } from "next/navigation";
 
-// This is our "Knowledge Base" for SEO text
 const CONDITION_CONTENT: Record<string, { title: string; description: string }> = {
   psoriasis: {
     title: "Psoriasis Clinical Trials",
@@ -28,10 +27,12 @@ export function generateStaticParams() {
   return Object.keys(CONDITION_CONTENT).map((slug) => ({ slug }));
 }
 
-export default function ConditionPage({ params }: { params: { slug: string } }) {
-  const content = CONDITION_CONTENT[params.slug];
+// UPDATE: We made 'params' a Promise to satisfy Next.js 15
+export default async function ConditionPage({ params }: { params: Promise<{ slug: string }> }) {
+  // Await the params before using them
+  const resolvedParams = await params;
+  const content = CONDITION_CONTENT[resolvedParams.slug];
 
-  // If someone types /condition/pizza, show 404
   if (!content) {
     return notFound();
   }
@@ -40,7 +41,6 @@ export default function ConditionPage({ params }: { params: { slug: string } }) 
     <main className="min-h-screen bg-white">
       <Navbar />
       
-      {/* SEO Header */}
       <div className="bg-slate-50 border-b border-slate-200">
         <div className="mx-auto max-w-7xl px-6 py-16">
           <div className="mb-6">
@@ -73,8 +73,7 @@ export default function ConditionPage({ params }: { params: { slug: string } }) 
         </div>
       </div>
 
-      {/* The Grid - Pre-filtered for this condition */}
-      <TrialGrid searchQuery={params.slug === "eczema" ? "eczema" : params.slug === "acne" ? "acne" : params.slug === "alopecia" ? "alopecia" : "psoriasis"} />
+      <TrialGrid searchQuery={resolvedParams.slug === "eczema" ? "eczema" : resolvedParams.slug === "acne" ? "acne" : resolvedParams.slug === "alopecia" ? "alopecia" : "psoriasis"} />
     </main>
   );
 }
