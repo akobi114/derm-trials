@@ -1,12 +1,13 @@
 import type { Metadata } from "next";
-import { Plus_Jakarta_Sans } from "next/font/google";
+import { Inter } from "next/font/google";
 import "./globals.css";
+import Footer from "@/components/Footer"; // <--- IMPORT THIS
 
-const jakarta = Plus_Jakarta_Sans({ subsets: ["latin"] });
+const inter = Inter({ subsets: ["latin"] });
 
 export const metadata: Metadata = {
-  title: "DermTrials | Find Dermatology Clinical Trials Near You",
-  description: "Access breakthrough skin treatments and paid clinical trials. The patient-first search engine for dermatology research.",
+  title: "DermTrials - Find Dermatology Clinical Trials",
+  description: "Match with active dermatology studies near you.",
 };
 
 export default function RootLayout({
@@ -16,7 +17,10 @@ export default function RootLayout({
 }>) {
   return (
     <html lang="en">
-      <body className={jakarta.className}>{children}</body>
+      <body className={inter.className}>
+        {children}
+        <Footer /> {/* <--- ADD THIS HERE */}
+      </body>
     </html>
   );
 }
