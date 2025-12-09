@@ -18,7 +18,10 @@ export default function PatientPipeline() {
   const [loading, setLoading] = useState(true);
   const [authLoading, setAuthLoading] = useState(true);
   const [selectedLead, setSelectedLead] = useState<any>(null);
+  
+  // Expanded sections state
   const [expandedSections, setExpandedSections] = useState<string[]>(['review']);
+  
   const [noteText, setNoteText] = useState("");
   const [savingNote, setSavingNote] = useState(false);
 
@@ -107,13 +110,15 @@ export default function PatientPipeline() {
 
     if (!error) {
       setLeads(current => current.map(l => l.id === selectedLead.id ? { ...l, notes: updatedNotes } : l));
-      setSelectedLead(prev => ({ ...prev, notes: updatedNotes }));
+      // FIX 1: Explicitly type 'prev' as any to satisfy TypeScript build
+      setSelectedLead((prev: any) => ({ ...prev, notes: updatedNotes }));
     }
   };
 
   const updateLeadStatus = async (id: number, newStatus: string) => {
     setLeads(current => current.map(l => l.id === id ? { ...l, status: newStatus } : l));
-    if (selectedLead?.id === id) setSelectedLead(prev => ({ ...prev, status: newStatus }));
+    // FIX 2: Explicitly type 'prev' as any
+    if (selectedLead?.id === id) setSelectedLead((prev: any) => ({ ...prev, status: newStatus }));
     
     const { error } = await supabase.from('leads').update({ status: newStatus }).eq('id', id);
     if (error) {
@@ -129,7 +134,8 @@ export default function PatientPipeline() {
     const { error } = await supabase.from('leads').update({ notes: noteText }).eq('id', selectedLead.id);
     if (!error) {
       setLeads(current => current.map(l => l.id === selectedLead.id ? { ...l, notes: noteText } : l));
-      setSelectedLead(prev => ({ ...prev, notes: noteText }));
+      // FIX 3: Explicitly type 'prev' as any
+      setSelectedLead((prev: any) => ({ ...prev, notes: noteText }));
     }
     setSavingNote(false);
   };
@@ -144,7 +150,7 @@ export default function PatientPipeline() {
   const conversionRate = totalLeads > 0 ? ((referredCount / totalLeads) * 100).toFixed(1) : "0.0";
   const qualityScore = totalLeads > 0 ? ((strongLeadsCount / totalLeads) * 100).toFixed(0) : "0";
 
-  // --- 5. BUCKETS ---
+  // --- 5. BUCKETS & SORTING ---
   const isNew = (s: string) => ['Strong Lead', 'Unlikely - Review Needed', 'New'].includes(s);
   
   const leadsToReview = leads
@@ -301,13 +307,11 @@ export default function PatientPipeline() {
                     <option value="Unlikely - Review Needed">New - Needs Review</option>
                     <option value="Pending">Pending Info</option>
                     <option value="Sent to Site">Sent to Site</option>
-                    {/* STRICT WORKFLOW: "Referred" disabled unless sent first */}
                     <option 
                       value="Referred" 
-                      disabled={selectedLead.status !== 'Sent to Site' && selectedLead.status !== 'Referred'}
-                      className="text-slate-400"
+                      className="text-emerald-700 font-bold"
                     >
-                      Referred (Success) {selectedLead.status !== 'Sent to Site' && selectedLead.status !== 'Referred' ? "(Must send to site first)" : ""}
+                      Referred (Success)
                     </option>
                     <option value="Rejected">Rejected</option>
                   </select>
@@ -367,7 +371,7 @@ export default function PatientPipeline() {
               </div>
             </div>
 
-            {/* ACTION FOOTER (ZONED LAYOUT) */}
+            {/* ACTION FOOTER */}
             <div className="p-4 border-t border-slate-100 bg-white shrink-0 grid grid-cols-1 md:grid-cols-4 gap-4">
               
               {/* ZONE 1: REJECT */}
@@ -410,7 +414,6 @@ export default function PatientPipeline() {
                 >
                   <Mail className="h-3 w-3" /> Draft Email
                 </a>
-                {/* HIDE "Move to Sent" if already Sent or Referred */}
                 {selectedLead.status !== 'Sent to Site' && selectedLead.status !== 'Referred' && (
                   <button onClick={() => updateLeadStatus(selectedLead.id, 'Sent to Site')} className="w-full py-2 bg-blue-600 text-white font-bold rounded-lg hover:bg-blue-700 text-center text-xs flex items-center justify-center gap-2 shadow-sm">
                     <Send className="h-3 w-3" /> Move to Sent
@@ -420,16 +423,15 @@ export default function PatientPipeline() {
 
               {/* ZONE 4: MISC */}
               <div className="flex flex-col gap-2 justify-end">
-                {/* STRICT LOGIC: ONLY show if currently "Sent to Site" */}
-                {selectedLead.status === 'Sent to Site' ? (
+                {selectedLead.status === 'Sent to Site' || selectedLead.status === 'Referred' || selectedLead.status === 'Pending' || selectedLead.status.includes('Strong') || selectedLead.status.includes('Review') ? (
                    <button onClick={() => updateLeadStatus(selectedLead.id, 'Referred')} className="w-full py-2 bg-emerald-600 text-white font-bold rounded-lg hover:bg-emerald-700 text-center text-xs flex items-center justify-center gap-2 shadow-md mb-auto h-full">
                      <CheckCircle2 className="h-4 w-4" /> Mark Referred
                    </button>
-                ) : (selectedLead.status === 'Rejected' || selectedLead.status === 'Referred' ? (
+                ) : (selectedLead.status === 'Rejected' && (
                    <button onClick={() => updateLeadStatus(selectedLead.id, 'Strong Lead')} className="w-full py-2 bg-white border border-slate-300 text-slate-500 font-bold rounded-lg hover:text-slate-700 text-center text-xs flex items-center justify-center gap-2 mb-auto">
                      <Undo2 className="h-3 w-3" /> Reset Status
                    </button>
-                ) : <div className="flex-1"></div>)}
+                ))}
                 
                 <button onClick={() => setSelectedLead(null)} className="w-full py-2 bg-slate-800 text-white font-bold rounded-lg hover:bg-slate-900 text-center text-xs">
                   Close
