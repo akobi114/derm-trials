@@ -9,7 +9,7 @@ import {
   Users, Star, UserCheck, Phone, Mail, FileText, 
   Settings, ArrowRight, Loader2, 
   FlaskConical, X, BookOpen, CheckCircle2, XCircle, HelpCircle, 
-  Send, ChevronDown, ChevronRight, Save, AlertTriangle, PenLine, Undo2, User
+  Send, ChevronDown, ChevronRight, Save, AlertTriangle, PenLine, Undo2, User, Eye
 } from "lucide-react";
 
 export default function PatientPipeline() {
@@ -110,14 +110,14 @@ export default function PatientPipeline() {
 
     if (!error) {
       setLeads(current => current.map(l => l.id === selectedLead.id ? { ...l, notes: updatedNotes } : l));
-      // FIX 1: Explicitly type 'prev' as any to satisfy TypeScript build
+      // FIXED: Explicitly type prev
       setSelectedLead((prev: any) => ({ ...prev, notes: updatedNotes }));
     }
   };
 
   const updateLeadStatus = async (id: number, newStatus: string) => {
     setLeads(current => current.map(l => l.id === id ? { ...l, status: newStatus } : l));
-    // FIX 2: Explicitly type 'prev' as any
+    // FIXED: Explicitly type prev
     if (selectedLead?.id === id) setSelectedLead((prev: any) => ({ ...prev, status: newStatus }));
     
     const { error } = await supabase.from('leads').update({ status: newStatus }).eq('id', id);
@@ -134,7 +134,7 @@ export default function PatientPipeline() {
     const { error } = await supabase.from('leads').update({ notes: noteText }).eq('id', selectedLead.id);
     if (!error) {
       setLeads(current => current.map(l => l.id === selectedLead.id ? { ...l, notes: noteText } : l));
-      // FIX 3: Explicitly type 'prev' as any
+      // FIXED: Explicitly type prev
       setSelectedLead((prev: any) => ({ ...prev, notes: noteText }));
     }
     setSavingNote(false);
@@ -170,8 +170,12 @@ export default function PatientPipeline() {
 
   // --- 6. HELPERS ---
   const isDuplicate = (email: string) => email && leads.filter(l => l.email && l.email.toLowerCase() === email.toLowerCase()).length > 1;
-  const getRejectEmailLink = (lead) => `mailto:${lead.email}?subject=Update regarding your application for ${lead.trial_id}&body=Hi ${lead.name},%0D%0A%0D%0AThank you for your interest in the clinical trial: ${lead.trial_title}.%0D%0A%0D%0AUpon further review of your screener answers against the study protocols, we have determined that you do not meet the specific inclusion criteria required for this study at this time.%0D%0A%0D%0AWe appreciate you taking the time to apply.%0D%0A%0D%0ABest regards,%0D%0ADermTrials.Health`;
-  const getMoreInfoEmailLink = (lead) => `mailto:${lead.email}?subject=Additional information needed for ${lead.trial_id}&body=Hi ${lead.name},%0D%0A%0D%0AThank you for your interest in the clinical trial: ${lead.trial_title}.%0D%0A%0D%0ABased on your answers, we need a little more information to determine if you fully qualify for this study. Could you please clarify a few details regarding your medical history?%0D%0A%0D%0A[INSERT SPECIFIC QUESTION HERE]%0D%0A%0D%0ABest regards,%0D%0ADermTrials.Health`;
+  
+  // FIXED: Added ': any' to 'lead' parameter in these 3 functions to fix build error
+  const getRejectEmailLink = (lead: any) => `mailto:${lead.email}?subject=Update regarding your application for ${lead.trial_id}&body=Hi ${lead.name},%0D%0A%0D%0AThank you for your interest in the clinical trial: ${lead.trial_title}.%0D%0A%0D%0AUpon further review of your screener answers against the study protocols, we have determined that you do not meet the specific inclusion criteria required for this study at this time.%0D%0A%0D%0AWe appreciate you taking the time to apply.%0D%0A%0D%0ABest regards,%0D%0ADermTrials.Health`;
+  
+  const getMoreInfoEmailLink = (lead: any) => `mailto:${lead.email}?subject=Additional information needed for ${lead.trial_id}&body=Hi ${lead.name},%0D%0A%0D%0AThank you for your interest in the clinical trial: ${lead.trial_title}.%0D%0A%0D%0ABased on your answers, we need a little more information to determine if you fully qualify for this study. Could you please clarify a few details regarding your medical history?%0D%0A%0D%0A[INSERT SPECIFIC QUESTION HERE]%0D%0A%0D%0ABest regards,%0D%0ADermTrials.Health`;
+  
   const getTrialCoordinatorEmailLink = (lead: any) => {
     let answersText = "";
     if (lead.trial_questions && lead.answers) {
@@ -414,6 +418,7 @@ export default function PatientPipeline() {
                 >
                   <Mail className="h-3 w-3" /> Draft Email
                 </a>
+                {/* HIDE if already sent */}
                 {selectedLead.status !== 'Sent to Site' && selectedLead.status !== 'Referred' && (
                   <button onClick={() => updateLeadStatus(selectedLead.id, 'Sent to Site')} className="w-full py-2 bg-blue-600 text-white font-bold rounded-lg hover:bg-blue-700 text-center text-xs flex items-center justify-center gap-2 shadow-sm">
                     <Send className="h-3 w-3" /> Move to Sent
@@ -423,15 +428,16 @@ export default function PatientPipeline() {
 
               {/* ZONE 4: MISC */}
               <div className="flex flex-col gap-2 justify-end">
-                {selectedLead.status === 'Sent to Site' || selectedLead.status === 'Referred' || selectedLead.status === 'Pending' || selectedLead.status.includes('Strong') || selectedLead.status.includes('Review') ? (
+                {/* CHANGED: ENABLED EVERYWHERE except final stages */}
+                {selectedLead.status !== 'Referred' && selectedLead.status !== 'Rejected' ? (
                    <button onClick={() => updateLeadStatus(selectedLead.id, 'Referred')} className="w-full py-2 bg-emerald-600 text-white font-bold rounded-lg hover:bg-emerald-700 text-center text-xs flex items-center justify-center gap-2 shadow-md mb-auto h-full">
                      <CheckCircle2 className="h-4 w-4" /> Mark Referred
                    </button>
-                ) : (selectedLead.status === 'Rejected' && (
+                ) : (selectedLead.status === 'Rejected' || selectedLead.status === 'Referred' ? (
                    <button onClick={() => updateLeadStatus(selectedLead.id, 'Strong Lead')} className="w-full py-2 bg-white border border-slate-300 text-slate-500 font-bold rounded-lg hover:text-slate-700 text-center text-xs flex items-center justify-center gap-2 mb-auto">
                      <Undo2 className="h-3 w-3" /> Reset Status
                    </button>
-                ))}
+                ) : <div className="flex-1"></div>)}
                 
                 <button onClick={() => setSelectedLead(null)} className="w-full py-2 bg-slate-800 text-white font-bold rounded-lg hover:bg-slate-900 text-center text-xs">
                   Close
