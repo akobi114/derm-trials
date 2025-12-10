@@ -1,39 +1,52 @@
-"use client";
+import Link from 'next/link';
+import { FlaskConical } from 'lucide-react';
 
 export default function Footer() {
   return (
-    <footer className="bg-slate-50 border-t border-slate-200 mt-auto">
-      <div className="mx-auto max-w-7xl px-6 py-12">
-        <div className="grid grid-cols-1 md:grid-cols-2 gap-8">
-          
-          {/* Brand & Copyright */}
-          <div>
-            <span className="text-lg font-bold text-slate-900">
-              Derm<span className="text-indigo-600">Trials</span>
-            </span>
-            <p className="mt-4 text-sm text-slate-500 max-w-xs">
-              Connecting patients with breakthrough dermatology research. 
-              Find your match today.
-            </p>
-            <p className="mt-4 text-xs text-slate-400">
-              &copy; {new Date().getFullYear()} DermTrials. All rights reserved.
-            </p>
+    <footer className="bg-slate-50 border-t border-slate-200 py-12 mt-auto">
+      <div className="max-w-7xl mx-auto px-6">
+        
+        <div className="flex flex-col md:flex-row justify-between items-center gap-6 mb-8">
+          {/* Brand */}
+          <div className="flex items-center gap-2 opacity-50 hover:opacity-100 transition-opacity">
+            <div className="bg-slate-200 p-1.5 rounded-lg">
+              <FlaskConical className="h-4 w-4 text-slate-500" />
+            </div>
+            <span className="font-bold text-slate-700">DermTrials</span>
           </div>
 
-          {/* REQUIRED GOVERNMENT DISCLAIMER */}
-          <div className="text-xs text-slate-500 space-y-3">
-            <p className="font-semibold text-slate-700">Data Source & Disclaimer</p>
-            <p>
-              This product uses the <strong>ClinicalTrials.gov API</strong> but is not endorsed or certified by the U.S. National Library of Medicine (NLM), the National Institutes of Health (NIH), or the U.S. Department of Health and Human Services (HHS).
-            </p>
-            <p>
-              Listing a study on this site does not mean it has been evaluated by the U.S. Federal Government. The safety and scientific validity of this study is the responsibility of the study sponsor and investigators.
-            </p>
-            <p>
-              Always consult with a healthcare professional before participating in any clinical trial.
-            </p>
+          {/* Links (Minimalist) */}
+          <div className="flex gap-8 text-sm text-slate-500 font-medium">
+            <Link href="/" className="hover:text-indigo-600 transition-colors">Home</Link>
+            <Link href="/conditions" className="hover:text-indigo-600 transition-colors">Browse Conditions</Link>
+            <Link href="/terms" className="hover:text-indigo-600 transition-colors">Terms & Data</Link>
           </div>
         </div>
+
+        {/* COMPLIANCE & ATTRIBUTION SECTION */}
+        <div className="border-t border-slate-200 pt-8 text-center md:text-left">
+          
+          {/* Compliance Text - Low contrast to not distract, but readable for legal */}
+          <div className="text-[11px] text-slate-400 leading-relaxed max-w-4xl space-y-2">
+            <p>
+              <strong>Data Source:</strong> Trial data sourced from the U.S. National Library of Medicine (NLM) at ClinicalTrials.gov. NLM, NIH, and ClinicalTrials.gov do not endorse or recommend this product.
+            </p>
+            <p>
+              <strong>Medical Disclaimer:</strong> Content on this site is for informational and recruitment purposes only and is not medical advice. Participation in a clinical trial is a significant medical decision that should be discussed with your doctor.
+            </p>
+          </div>
+          
+          <div className="flex flex-col md:flex-row justify-between items-center mt-6 gap-4">
+            <p className="text-xs text-slate-400 font-medium">
+              © {new Date().getFullYear()} DermTrials Research.
+            </p>
+            {/* Secret Admin Link: Only visible on hover */}
+            <Link href="/login" className="text-[10px] text-slate-200 hover:text-indigo-400 transition-colors">
+              Admin
+            </Link>
+          </div>
+        </div>
+
       </div>
     </footer>
   );

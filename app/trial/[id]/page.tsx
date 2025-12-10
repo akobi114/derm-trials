@@ -1,432 +1,196 @@
-"use client";
-
-import { useEffect, useState } from 'react';
-import { useParams } from 'next/navigation';
-import { supabase } from '@/lib/supabase';
-import Navbar from '@/components/Navbar';
-import ReactMarkdown from 'react-markdown'; 
-import { 
-  ArrowLeft, MapPin, Building2, 
-  FileText, Users, ShieldCheck, ChevronDown, CheckCircle2, FlaskConical, BookOpen,
-  Sparkles, Info, ClipboardCheck, Check, X, ArrowRight, Star, UserCheck, PartyPopper, 
-  ScanSearch, Lock, HeartHandshake, Wallet, Stethoscope
-} from 'lucide-react';
+import { createClient } from '@supabase/supabase-js';
 import Link from 'next/link';
-import confetti from 'canvas-confetti';
+import { notFound } from 'next/navigation';
+import Navbar from '@/components/Navbar';
+import type { Metadata, ResolvingMetadata } from 'next'; // Import Types
+import { 
+  ArrowRight, CheckCircle2, FlaskConical, Wallet, 
+  HeartHandshake, Star, Info, MapPin, Building2, 
+  ArrowLeft, BookOpen, FileText, ShieldCheck, ChevronDown, 
+  Lock, ClipboardCheck 
+} from 'lucide-react';
+import ReactMarkdown from 'react-markdown';
+import TrialClientLogic from '@/components/TrialClientLogic'; // We will move the client logic here
 
-export default function TrialDetails() {
-  const { id } = useParams();
-  const [trial, setTrial] = useState<any>(null);
-  const [loading, setLoading] = useState(true);
+// Initialize Supabase
+const supabase = createClient(
+  process.env.NEXT_PUBLIC_SUPABASE_URL!,
+  process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!
+);
 
-  // --- SCREENER STATE ---
-  const [isModalOpen, setIsModalOpen] = useState(false);
-  const [answers, setAnswers] = useState<Record<string, string>>({});
-  const [screenerStep, setScreenerStep] = useState<'intro' | 'quiz' | 'analyzing' | 'form' | 'success'>('intro');
-  const [leadStatus, setLeadStatus] = useState<'Strong Lead' | 'Unlikely - Review Needed'>('Strong Lead');
-  const [leadForm, setLeadForm] = useState({ name: '', email: '', phone: '' });
-  const [submittingLead, setSubmittingLead] = useState(false);
+export const dynamic = 'force-dynamic';
 
-  useEffect(() => {
-    async function fetchTrial() {
-      if (!id) return;
-      
-      const { data, error } = await supabase
-        .from('trials')
-        .select('*')
-        .eq('nct_id', id)
-        .single();
+type Props = {
+  params: Promise<{ id: string }>
+}
 
-      if (error) console.error("Error fetching trial:", error);
-      
-      if (data) {
-          setTrial(data);
-      }
-      setLoading(false);
-    }
-    fetchTrial();
-  }, [id]);
+// --- 1. DYNAMIC SEO GENERATOR ---
+export async function generateMetadata(
+  { params }: Props,
+  parent: ResolvingMetadata
+): Promise<Metadata> {
+  const { id } = await params;
+  
+  // Fetch trial for SEO
+  const { data: trial } = await supabase.from('trials').select('*').eq('nct_id', id).single();
 
-  // --- MODAL CONTROLS ---
-  const openScreener = () => {
-    setScreenerStep('intro');
-    setAnswers({});
-    setIsModalOpen(true);
-    document.body.style.overflow = 'hidden'; 
+  if (!trial) {
+    return { title: 'Trial Not Found' };
+  }
+
+  const title = `${trial.condition || 'Dermatology'} Clinical Trial in ${trial.locations?.[0]?.city || 'Phoenix'} | DermTrials`;
+  const desc = `Join a paid research study for ${trial.condition}. ${trial.title}. Check your eligibility now.`;
+
+  return {
+    title: title,
+    description: desc,
+    openGraph: {
+      title: title,
+      description: desc,
+      // You can eventually add a dynamic image here
+      images: ['/og-default.png'], 
+    },
   };
+}
 
-  const closeScreener = () => {
-    setIsModalOpen(false);
-    document.body.style.overflow = 'auto'; 
-  };
+// --- 2. SERVER COMPONENT ---
+export default async function TrialDetail({ params }: Props) {
+  const { id } = await params;
 
-  // --- LOGIC: Check Answers ---
-  const handleQuizCheck = async () => {
-    setScreenerStep('analyzing');
-    await new Promise(resolve => setTimeout(resolve, 2000));
+  const { data: trial, error } = await supabase
+    .from('trials')
+    .select('*')
+    .eq('nct_id', id)
+    .single();
 
-    if (!trial?.screener_questions) {
-        setScreenerStep('form'); 
-        return;
-    }
+  if (error || !trial) {
+    notFound();
+  }
 
-    let isMatch = true;
-    trial.screener_questions.forEach((q: any, index: number) => {
-      const userAnswer = (answers[index] || "").trim().toLowerCase();
-      const correct = (q.correct_answer || "").trim().toLowerCase();
-      if (userAnswer !== correct) {
-        isMatch = false;
-      }
-    });
-
-    if (isMatch) {
-      setLeadStatus('Strong Lead');
-      const duration = 3000;
-      const end = Date.now() + duration;
-      const frame = () => {
-        confetti({ particleCount: 5, angle: 60, spread: 55, origin: { x: 0 }, zIndex: 9999, colors: ['#4f46e5', '#10b981', '#fbbf24'] });
-        confetti({ particleCount: 5, angle: 120, spread: 55, origin: { x: 1 }, zIndex: 9999, colors: ['#4f46e5', '#10b981', '#fbbf24'] });
-        if (Date.now() < end) requestAnimationFrame(frame);
-      };
-      frame();
-    } else {
-      setLeadStatus('Unlikely - Review Needed');
-    }
-    setScreenerStep('form');
-  };
-
-  // --- LOGIC: Submit Lead ---
-  const handleLeadSubmit = async (e: React.FormEvent) => {
-    e.preventDefault();
-    setSubmittingLead(true);
-
-    const { error } = await supabase
-      .from('leads')
-      .insert({
-        trial_id: trial.nct_id,
-        name: leadForm.name,
-        email: leadForm.email,
-        phone: leadForm.phone,
-        status: leadStatus, 
-        answers: answers
-      });
-
-    setSubmittingLead(false);
-    if (!error) {
-      setScreenerStep('success');
-    } else {
-      alert("Something went wrong. Please try again.");
-    }
-  };
-
-  const getStatusColor = (status: string) => {
+  // Helper for status styling
+  const getStatusStyle = (status: string) => {
     const s = (status || "").toLowerCase().trim();
     if (s === 'recruiting') return { badge: "bg-emerald-50 text-emerald-700 ring-emerald-600/20", dot: "bg-emerald-500", glow: true };
-    if (s.includes('active') && s.includes('not')) return { badge: "bg-amber-50 text-amber-700 ring-amber-600/20", dot: "bg-amber-500", glow: false };
-    if (s.includes('not yet')) return { badge: "bg-blue-50 text-blue-700 ring-blue-600/20", dot: "bg-blue-500", glow: false };
     return { badge: "bg-slate-50 text-slate-600 ring-slate-500/10", dot: "bg-slate-400", glow: false };
   };
-
-  if (loading) return <div className="p-20 text-center text-slate-500">Loading study details...</div>;
-  if (!trial) return <div className="p-20 text-center text-red-500">Trial not found.</div>;
-
-  const statusStyle = getStatusColor(trial.status);
+  const statusStyle = getStatusStyle(trial.status);
   const isRecruiting = trial.status && trial.status.toLowerCase().trim() === 'recruiting';
 
   return (
-    <div className="min-h-screen bg-slate-50 pb-20">
+    <div className="min-h-screen bg-slate-50 font-sans pb-20">
       <Navbar />
 
-      {/* --- MODAL OVERLAY --- */}
-      {isModalOpen && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center p-4">
-          <div className="absolute inset-0 bg-slate-900/60 backdrop-blur-sm transition-opacity" onClick={closeScreener}></div>
-          <div className="relative bg-white rounded-2xl shadow-2xl w-full max-w-lg overflow-hidden animate-in fade-in zoom-in-95 duration-200 max-h-[90vh] flex flex-col">
-            <div className="flex items-center justify-between px-6 py-4 border-b border-slate-100 bg-slate-50/50 shrink-0">
-              <h3 className="font-bold text-slate-800 flex items-center gap-2">
-                <ClipboardCheck className="h-5 w-5 text-indigo-600" /> Eligibility Check
-              </h3>
-              <button onClick={closeScreener} className="p-2 hover:bg-slate-200 rounded-full transition-colors text-slate-400 hover:text-slate-600"><X className="h-5 w-5" /></button>
-            </div>
+      {/* --- STRUCTURED DATA (SCHEMA.ORG) FOR GOOGLE --- */}
+      <script
+        type="application/ld+json"
+        dangerouslySetInnerHTML={{
+          __html: JSON.stringify({
+            "@context": "https://schema.org",
+            "@type": "MedicalStudy",
+            "name": trial.title,
+            "status": trial.status,
+            "healthCondition": trial.condition,
+            "sponsor": { "@type": "Organization", "name": trial.sponsor },
+            "location": {
+                "@type": "Place",
+                "name": "DermTrials Site",
+                "address": {
+                    "@type": "PostalAddress",
+                    "addressLocality": trial.locations?.[0]?.city || "Phoenix",
+                    "addressRegion": trial.locations?.[0]?.state || "AZ"
+                }
+            }
+          })
+        }}
+      />
 
-            <div className="p-6 overflow-y-auto">
-              {screenerStep === 'intro' && (
-                <div className="text-center py-4">
-                  <div className="w-16 h-16 bg-indigo-100 text-indigo-600 rounded-full flex items-center justify-center mx-auto mb-4">
-                    <ShieldCheck className="h-8 w-8" />
-                  </div>
-                  <h4 className="text-xl font-bold text-slate-900 mb-2">Check Your Eligibility</h4>
-                  <p className="text-slate-600 mb-8 max-w-xs mx-auto text-sm leading-relaxed">
-                    Answer a few simple questions to see if you may qualify for the <strong>{trial.title}</strong> study.
-                  </p>
-                  <button onClick={() => setScreenerStep('quiz')} className="w-full bg-indigo-600 text-white py-3.5 rounded-xl font-bold hover:bg-indigo-700 transition-all shadow-lg shadow-indigo-200 flex items-center justify-center gap-2">
-                    Start Questionnaire <ArrowRight className="h-4 w-4" />
-                  </button>
-                </div>
-              )}
-
-              {screenerStep === 'quiz' && (
-                <div className="space-y-6">
-                  <div className="space-y-6">
-                    {trial.screener_questions?.map((q: any, idx: number) => (
-                      <div key={idx} className="mb-6 last:mb-0">
-                        <p className="text-base font-semibold text-slate-800 mb-3">{idx + 1}. {q.question}</p>
-                        <div className="grid grid-cols-2 gap-3">
-                          {['Yes', 'No'].map((opt) => (
-                            <button key={opt} onClick={() => setAnswers({...answers, [idx]: opt})} className={`py-3 px-4 rounded-xl text-sm font-bold border-2 transition-all ${answers[idx] === opt ? 'border-indigo-600 bg-indigo-50 text-indigo-700' : 'border-slate-100 bg-white text-slate-500 hover:border-indigo-200'}`}>
-                              {opt}
-                            </button>
-                          ))}
-                        </div>
-                      </div>
-                    ))}
-                  </div>
-                  <button onClick={handleQuizCheck} disabled={!trial.screener_questions || Object.keys(answers).length < trial.screener_questions.length} className="w-full bg-slate-900 text-white py-3.5 rounded-xl font-bold hover:bg-slate-800 transition-colors disabled:opacity-50 disabled:cursor-not-allowed mt-4">
-                    Check Results
-                  </button>
-                </div>
-              )}
-
-              {screenerStep === 'analyzing' && (
-                <div className="py-12 text-center">
-                  <div className="relative w-16 h-16 mx-auto mb-6">
-                    <div className="absolute inset-0 border-4 border-indigo-100 rounded-full"></div>
-                    <div className="absolute inset-0 border-4 border-indigo-600 rounded-full border-t-transparent animate-spin"></div>
-                    <ScanSearch className="absolute inset-0 m-auto h-6 w-6 text-indigo-600 animate-pulse" />
-                  </div>
-                  <h4 className="text-lg font-bold text-slate-900">AI Analysis in Progress</h4>
-                  <p className="text-slate-500 text-sm mt-1">Answers being analyzed by AI for eligibility...</p>
-                </div>
-              )}
-
-              {screenerStep === 'form' && (
-                <div className="animate-in slide-in-from-right-4 duration-300">
-                  <div className={`p-5 rounded-xl mb-6 flex items-start gap-4 border shadow-sm ${leadStatus === 'Strong Lead' ? 'bg-emerald-50 border-emerald-100' : 'bg-indigo-50 border-indigo-100'}`}>
-                    <div className={`p-3 rounded-xl shrink-0 ${leadStatus === 'Strong Lead' ? 'bg-emerald-100 text-emerald-600' : 'bg-indigo-100 text-indigo-600'}`}>
-                       {leadStatus === 'Strong Lead' ? <PartyPopper className="h-6 w-6" /> : <ClipboardCheck className="h-6 w-6" />}
-                    </div>
-                    <div>
-                      <h5 className={`font-bold text-lg mb-1 ${leadStatus === 'Strong Lead' ? 'text-emerald-900' : 'text-indigo-900'}`}>
-                        {leadStatus === 'Strong Lead' ? "🎉 Great News! You May Qualify!" : "📋 Next Step: Human Review"}
-                      </h5>
-                      <p className={`text-sm leading-relaxed ${leadStatus === 'Strong Lead' ? 'text-emerald-700' : 'text-indigo-700'}`}>
-                        {leadStatus === 'Strong Lead' ? "Your answers suggest you likely match the study requirements. Submit your info now to secure your connection with the site." : "Some of your answers require a human expert to interpret. Submit your details so a study coordinator can manually assess your eligibility."}
-                      </p>
-                    </div>
-                  </div>
-                  <form onSubmit={handleLeadSubmit} className="space-y-4">
-                    <div><label className="block text-xs font-bold text-slate-500 uppercase mb-1">Full Name</label><input required type="text" className="w-full p-3 bg-slate-50 border border-slate-200 rounded-lg focus:ring-2 focus:ring-indigo-500 focus:outline-none transition-all" value={leadForm.name} onChange={e => setLeadForm({...leadForm, name: e.target.value})} /></div>
-                    <div><label className="block text-xs font-bold text-slate-500 uppercase mb-1">Email Address</label><input required type="email" className="w-full p-3 bg-slate-50 border border-slate-200 rounded-lg focus:ring-2 focus:ring-indigo-500 focus:outline-none transition-all" value={leadForm.email} onChange={e => setLeadForm({...leadForm, email: e.target.value})} /></div>
-                    <div><label className="block text-xs font-bold text-slate-500 uppercase mb-1">Phone Number</label><input required type="tel" className="w-full p-3 bg-slate-50 border border-slate-200 rounded-lg focus:ring-2 focus:ring-indigo-500 focus:outline-none transition-all" value={leadForm.phone} onChange={e => setLeadForm({...leadForm, phone: e.target.value})} /></div>
-                    <button type="submit" disabled={submittingLead} className="w-full bg-slate-900 text-white py-3.5 rounded-xl font-bold hover:bg-slate-800 transition-all shadow-md mt-2">{submittingLead ? "Submitting..." : "Submit Information"}</button>
-                  </form>
-                </div>
-              )}
-
-              {screenerStep === 'success' && (
-                <div className="text-center py-8">
-                  <div className="w-20 h-20 bg-emerald-100 text-emerald-600 rounded-full flex items-center justify-center mx-auto mb-6 animate-in zoom-in duration-300"><Check className="h-10 w-10" /></div>
-                  <h3 className="text-2xl font-bold text-slate-900 mb-2">We've got it!</h3>
-                  <p className="text-slate-600 mb-8">Your information has been sent to the research team. A coordinator will be in touch shortly.</p>
-                  <button onClick={closeScreener} className="px-8 py-3 bg-slate-100 text-slate-600 font-bold rounded-xl hover:bg-slate-200 transition-colors">Close</button>
-                </div>
-              )}
-            </div>
-          </div>
-        </div>
-      )}
-
-      {/* --- MAIN PAGE CONTENT --- */}
-      <main className="mx-auto max-w-5xl px-6 py-10">
+      <main className="max-w-5xl mx-auto px-6 py-10">
         
-        <Link href={trial?.condition ? `/condition/${encodeURIComponent(trial.condition)}` : "/"} className="inline-flex items-center text-sm font-medium text-slate-500 hover:text-indigo-600 mb-8 transition-colors">
-          <ArrowLeft className="mr-2 h-4 w-4" /> {trial?.condition ? `Back to ${trial.condition} Trials` : "Back to Search"}
+        {/* BACK LINK */}
+        <Link href="/" className="inline-flex items-center text-sm font-medium text-slate-500 hover:text-indigo-600 mb-8 transition-colors">
+          <ArrowLeft className="mr-2 h-4 w-4" /> Back to Search
         </Link>
 
-        {/* TITLE HEADER */}
+        {/* HEADER */}
         <div className="bg-white rounded-2xl shadow-sm border border-slate-200 p-8 mb-8">
           <div className="flex flex-wrap gap-3 mb-5">
             <span className={`inline-flex items-center gap-1.5 px-3 py-1 rounded-full text-xs font-bold uppercase tracking-wide ring-1 ring-inset ${statusStyle.badge}`}>
-              <span className={`relative flex h-2 w-2`}>{statusStyle.glow && <span className={`animate-ping absolute inline-flex h-full w-full rounded-full opacity-75 ${statusStyle.dot}`}></span>}<span className={`relative inline-flex rounded-full h-2 w-2 ${statusStyle.dot}`}></span></span>{trial.status}
+              <span className={`relative flex h-2 w-2`}>
+                {statusStyle.glow && <span className={`animate-ping absolute inline-flex h-full w-full rounded-full opacity-75 ${statusStyle.dot}`}></span>}
+                <span className={`relative inline-flex rounded-full h-2 w-2 ${statusStyle.dot}`}></span>
+              </span>
+              {trial.status}
             </span>
-            <span className="px-3 py-1 bg-slate-100 text-slate-600 text-xs font-bold uppercase tracking-wide rounded-full">{trial.phase}</span>
-            <span className="px-3 py-1 bg-slate-100 text-slate-600 text-xs font-bold uppercase tracking-wide rounded-full">{trial.study_type}</span>
+            <span className="px-3 py-1 bg-slate-100 text-slate-600 text-xs font-bold uppercase tracking-wide rounded-full">
+              {trial.phase}
+            </span>
           </div>
-          <h1 className="text-2xl md:text-3xl font-bold text-slate-900 mb-4 leading-tight">{trial.simple_title || trial.title}</h1>
+          <h1 className="text-2xl md:text-3xl font-bold text-slate-900 mb-4 leading-tight">
+            {trial.simple_title || trial.title}
+          </h1>
           <div className="flex flex-col md:flex-row md:items-center gap-4 text-sm text-slate-500 pt-4 border-t border-slate-100 mt-6">
-            <div className="flex items-center gap-2"><Building2 className="h-4 w-4 text-slate-400" /><span className="font-medium text-slate-900">{trial.sponsor}</span></div>
+            <div className="flex items-center gap-2">
+              <Building2 className="h-4 w-4 text-slate-400" />
+              <span className="font-medium text-slate-900">{trial.sponsor}</span>
+            </div>
             <div className="hidden md:block w-1 h-1 bg-slate-300 rounded-full" />
-            <div className="flex items-center gap-2"><span className="font-medium">NCT ID:</span> {trial.nct_id}</div>
+            <div className="flex items-center gap-2">
+              <span className="font-medium">NCT ID:</span> {trial.nct_id}
+            </div>
           </div>
         </div>
 
         <div className="grid grid-cols-1 lg:grid-cols-3 gap-8">
           
-          {/* --- LEFT COLUMN --- */}
+          {/* --- LEFT COLUMN: CONTENT --- */}
           <div className="lg:col-span-2 space-y-8">
             
-            {/* AI CLINICAL TRIAL SUMMARY */}
+            {/* AI OVERVIEW */}
             <section className="bg-white rounded-2xl shadow-sm border border-slate-200 p-8 relative"> 
               <div className="flex items-center gap-3 mb-4">
-                <div className="p-2 bg-indigo-100 text-indigo-600 rounded-lg"><Sparkles className="h-6 w-6" /></div>
-                <div className="flex items-center gap-2">
-                  <h2 className="text-xl font-bold text-slate-900">AI Powered Overview</h2>
-                  <div className="group relative flex items-center">
-                    <Info className="h-4 w-4 text-slate-400 cursor-help hover:text-indigo-600 transition-colors" />
-                    <div className="absolute left-1/2 bottom-full mb-3 w-64 -translate-x-1/2 px-4 py-3 bg-slate-800 text-white text-xs rounded-lg shadow-xl opacity-0 invisible group-hover:opacity-100 group-hover:visible transition-all duration-200 z-[100] text-center leading-relaxed pointer-events-none">
-                      <p>This summary is generated by AI and may contain errors. Please review the <strong>Official Study Overview</strong> below for verified medical details.</p>
-                      <div className="absolute top-full left-1/2 -translate-x-1/2 border-8 border-transparent border-t-slate-800"></div>
-                    </div>
-                  </div>
+                <div className="p-2 bg-indigo-100 text-indigo-600 rounded-lg">
+                  <Star className="h-6 w-6" />
                 </div>
+                <h2 className="text-xl font-bold text-slate-900">AI Powered Overview</h2>
               </div>
               <div className="text-slate-700 text-sm leading-7">
                 {trial.simple_summary ? (
                   <ReactMarkdown components={{ strong: ({node, ...props}) => <span className="font-extrabold text-slate-900" {...props} />, p: ({node, ...props}) => <p className="mb-4 last:mb-0" {...props} />, ul: ({node, ...props}) => <ul className="space-y-2 mb-4" {...props} />, li: ({node, ...props}) => <li className="leading-relaxed" {...props} /> }}>
                     {trial.simple_summary}
                   </ReactMarkdown>
-                ) : (
-                  <div className="bg-slate-50 border border-slate-100 rounded-xl p-6 text-center"><p className="text-slate-500 italic">"AI-Generated Simple Summary will appear here after processing."</p></div>
-                )}
+                ) : <p className="text-slate-500 italic">Processing summary...</p>}
               </div>
             </section>
 
-            {/* --- NEW SECTION: WHY PARTICIPATE (IRB COMPLIANT) --- */}
+            {/* BENEFITS (IRB SAFE) */}
             <section className="bg-gradient-to-br from-indigo-50 to-white p-6 rounded-2xl border border-indigo-100 shadow-sm">
               <h2 className="text-lg font-bold text-slate-900 mb-4 flex items-center gap-2">
                 <HeartHandshake className="h-5 w-5 text-indigo-600" /> Why Consider This Study?
               </h2>
               <div className="text-sm text-slate-700 leading-relaxed space-y-4">
-                {/* Fallback to generic IRB-safe text if AI hasn't generated specific benefits yet */}
                 {trial.ai_benefits ? (
                   <p className="whitespace-pre-wrap">{trial.ai_benefits}</p>
                 ) : (
                   <>
-                    <p>
-                      Participants in clinical trials gain access to investigational treatments before they are widely available. 
-                      You will receive close medical monitoring by board-certified specialists and study staff throughout the process.
-                    </p>
-                    <p>
-                      Additionally, your participation contributes to the advancement of medical science, potentially helping others with this condition in the future.
-                    </p>
+                    <p>Participants in clinical trials gain access to investigational treatments before they are widely available. You will receive close medical monitoring by board-certified specialists.</p>
+                    <p>Additionally, your participation contributes to the advancement of medical science, potentially helping others with this condition.</p>
                   </>
                 )}
               </div>
             </section>
 
-            {/* COLLAPSIBLE TABS */}
-            <div className="space-y-4">
-              {/* Official Overview */}
-              <details className="group bg-white rounded-xl shadow-sm border border-slate-200 overflow-hidden">
-                <summary className="flex items-center justify-between p-6 cursor-pointer list-none hover:bg-slate-50 transition-colors">
-                  <h3 className="text-lg font-bold text-slate-900 flex items-center gap-2"><BookOpen className="h-5 w-5 text-indigo-600" /> Official Study Overview</h3>
-                  <ChevronDown className="h-5 w-5 text-slate-400 group-open:rotate-180 transition-transform" />
-                </summary>
-                <div className="px-6 pb-6 border-t border-slate-100 pt-6"><p className="text-sm text-slate-700 leading-relaxed whitespace-pre-line">{trial.brief_summary || "No summary available."}</p></div>
-              </details>
+            {/* DETAILS (Collapsible Logic - Handled by Client Component below) */}
+            <TrialClientLogic trial={trial} />
 
-              {/* Study Design */}
-              <details className="group bg-white rounded-xl shadow-sm border border-slate-200 overflow-hidden">
-                <summary className="flex items-center justify-between p-6 cursor-pointer list-none hover:bg-slate-50 transition-colors">
-                  <h3 className="text-lg font-bold text-slate-900 flex items-center gap-2"><FileText className="h-5 w-5 text-indigo-600" /> Study Design & Methods</h3>
-                  <ChevronDown className="h-5 w-5 text-slate-400 group-open:rotate-180 transition-transform" />
-                </summary>
-                <div className="px-6 pb-6 border-t border-slate-100 pt-4">
-                  <div className="grid grid-cols-1 md:grid-cols-2 gap-6 text-sm">
-                    <div><p className="text-slate-500 font-semibold mb-1">Allocation</p><p className="text-slate-900">{trial.study_design?.allocation || "N/A"}</p></div>
-                  </div>
-                </div>
-              </details>
-
-              {/* Treatments & Arms */}
-              <details className="group bg-white rounded-xl shadow-sm border border-slate-200 overflow-hidden">
-                <summary className="flex items-center justify-between p-6 cursor-pointer list-none hover:bg-slate-50 transition-colors">
-                  <h3 className="text-lg font-bold text-slate-900 flex items-center gap-2"><FlaskConical className="h-5 w-5 text-indigo-600" /> Treatments & Arms</h3>
-                  <ChevronDown className="h-5 w-5 text-slate-400 group-open:rotate-180 transition-transform" />
-                </summary>
-                <div className="px-6 pb-6 border-t border-slate-100 pt-4">
-                  {trial.interventions && trial.interventions.length > 0 ? (
-                    <ul className="space-y-6">
-                      {trial.interventions.map((item: any, idx: number) => {
-                        if (item.data_type === 'arm_group') {
-                          return (
-                            <li key={idx} className="bg-slate-50 rounded-xl border border-slate-100 overflow-hidden">
-                              <div className="bg-slate-100 px-4 py-3 border-b border-slate-200 flex justify-between items-center"><span className="font-bold text-slate-900 text-sm">{item.title}</span><span className="text-[10px] font-bold uppercase tracking-wide bg-white px-2 py-0.5 rounded text-slate-500 border border-slate-200">{item.role}</span></div>
-                              <div className="p-4 space-y-3">{item.description && <p className="text-xs text-slate-600 leading-relaxed mb-4 border-b border-slate-100 pb-3">{item.description}</p>}<div><p className="text-[10px] font-bold text-slate-400 uppercase mb-2">Interventions</p>{item.interventions && item.interventions.length > 0 ? item.interventions.map((inv: any, i: number) => (<div key={i} className="mb-2 last:mb-0"><div className="flex items-center gap-2"><span className="px-1.5 py-0.5 bg-indigo-50 text-indigo-700 text-[10px] font-bold rounded">{inv.type}</span><span className="text-sm font-semibold text-slate-800">{inv.name}</span></div>{inv.description && <p className="text-xs text-slate-500 mt-1 pl-1">{inv.description}</p>}</div>)) : <span className="text-xs text-slate-400 italic">No specific interventions listed.</span>}</div></div>
-                            </li>
-                          );
-                        }
-                        return <li key={idx} className="bg-slate-50 p-4 rounded-lg border border-slate-100"><div className="flex items-center gap-2 mb-2"><span className="px-2 py-0.5 bg-white border border-slate-200 text-slate-500 text-[10px] font-bold uppercase rounded">{item.type}</span><span className="font-bold text-slate-900 text-sm">{item.name}</span></div><p className="text-xs text-slate-600">{item.description}</p></li>;
-                      })}
-                    </ul>
-                  ) : <p className="text-sm text-slate-500 italic">No specific interventions listed.</p>}
-                </div>
-              </details>
-
-              {/* Outcomes */}
-              <details className="group bg-white rounded-xl shadow-sm border border-slate-200 overflow-hidden">
-                <summary className="flex items-center justify-between p-6 cursor-pointer list-none hover:bg-slate-50 transition-colors">
-                  <h3 className="text-lg font-bold text-slate-900 flex items-center gap-2"><CheckCircle2 className="h-5 w-5 text-emerald-600" /> What are they measuring?</h3>
-                  <ChevronDown className="h-5 w-5 text-slate-400 group-open:rotate-180 transition-transform" />
-                </summary>
-                <div className="px-6 pb-6 border-t border-slate-100 pt-4 space-y-8">
-                  {trial.primary_outcomes && trial.primary_outcomes.length > 0 ? (
-                    <div>
-                      <h4 className="text-xs font-bold text-slate-400 uppercase tracking-wider mb-4 flex items-center gap-2"><span className="w-2 h-2 rounded-full bg-emerald-500"></span> Primary Goals</h4>
-                      <ul className="space-y-4">
-                        {trial.primary_outcomes.map((outcome: any, idx: number) => (
-                          <li key={idx} className="bg-slate-50 p-4 rounded-lg border border-slate-100"><p className="font-bold text-slate-900 text-sm mb-1">{outcome.measure}</p>{outcome.description && <p className="text-xs text-slate-600 mb-2 leading-relaxed border-b border-slate-200 pb-2">{outcome.description}</p>}<p className="text-xs text-slate-400 font-medium">Timeframe: {outcome.timeFrame}</p></li>
-                        ))}
-                      </ul>
-                    </div>
-                  ) : <p className="text-sm text-slate-500 italic">No specific primary outcomes listed.</p>}
-                  {trial.secondary_outcomes && trial.secondary_outcomes.length > 0 && (
-                    <div>
-                      <h4 className="text-xs font-bold text-slate-400 uppercase tracking-wider mb-4 flex items-center gap-2"><span className="w-2 h-2 rounded-full bg-slate-400"></span> Secondary Goals</h4>
-                      <details className="group/secondary"><summary className="text-sm font-medium text-indigo-600 cursor-pointer hover:text-indigo-800 flex items-center gap-2">View {trial.secondary_outcomes.length} Secondary Measures<ChevronDown className="h-4 w-4 group-open/secondary:rotate-180 transition-transform" /></summary><ul className="space-y-4 mt-4">{trial.secondary_outcomes.map((outcome: any, idx: number) => (<li key={idx} className="pl-4 border-l-2 border-slate-200"><p className="font-medium text-slate-800 text-sm">{outcome.measure}</p>{outcome.description && <p className="text-xs text-slate-500 mt-1">{outcome.description}</p>}<p className="text-[10px] text-slate-400 mt-1">Timeframe: {outcome.timeFrame}</p></li>))}</ul></details>
-                    </div>
-                  )}
-                </div>
-              </details>
-
-              {/* Eligibility Criteria */}
-              <details className="group bg-white rounded-xl shadow-sm border border-slate-200 overflow-hidden">
-                <summary className="flex items-center justify-between p-6 cursor-pointer list-none hover:bg-slate-50 transition-colors">
-                  <h3 className="text-lg font-bold text-slate-900 flex items-center gap-2"><ShieldCheck className="h-5 w-5 text-indigo-600" /> Detailed Criteria Text</h3>
-                  <ChevronDown className="h-5 w-5 text-slate-400 group-open:rotate-180 transition-transform" />
-                </summary>
-                <div className="px-6 pb-6 border-t border-slate-100 pt-4"><pre className="whitespace-pre-wrap font-sans text-sm text-slate-700 leading-relaxed">{trial.inclusion_criteria}</pre></div>
-              </details>
-            </div>
           </div>
 
           {/* --- RIGHT SIDEBAR: ACTION CENTER --- */}
           <div className="space-y-6">
             
-            {/* CTA CARD */}
-            {isRecruiting ? (
-              <div className="bg-white rounded-2xl shadow-sm border border-slate-200 p-6 relative overflow-hidden group">
-                 <div className="absolute top-0 right-0 w-32 h-32 bg-indigo-50 rounded-full blur-3xl -mr-10 -mt-10 transition-transform group-hover:scale-150 duration-700"></div>
-                 <div className="relative z-10">
-                   <div className="w-12 h-12 bg-indigo-100 text-indigo-600 rounded-xl flex items-center justify-center mb-4"><ClipboardCheck className="h-6 w-6" /></div>
-                   <h3 className="text-lg font-bold text-slate-900 mb-2">Am I Eligible?</h3>
-                   <p className="text-slate-500 text-sm mb-6 leading-relaxed">Take a 1-2 minute questionnaire to see if you match the criteria for this study.</p>
-                   <button onClick={openScreener} className="w-full bg-indigo-600 text-white py-3 rounded-xl font-bold hover:bg-indigo-700 hover:shadow-lg hover:shadow-indigo-200 transition-all duration-300 flex items-center justify-center gap-2">
-                     Check Eligibility <ArrowRight className="h-4 w-4" />
-                   </button>
-                 </div>
-              </div>
-            ) : (
-              <div className="bg-slate-50 rounded-2xl border border-slate-200 p-6 relative overflow-hidden">
-                 <div className="relative z-10">
-                   <div className="w-12 h-12 bg-slate-200 text-slate-500 rounded-xl flex items-center justify-center mb-4"><Lock className="h-6 w-6" /></div>
-                   <h3 className="text-lg font-bold text-slate-700 mb-2">Enrollment Closed</h3>
-                   <p className="text-slate-500 text-sm mb-4 leading-relaxed">This study is currently <strong>{trial.status ? trial.status.toLowerCase() : 'closed'}</strong> and is not accepting new applicants at this time.</p>
-                 </div>
-              </div>
-            )}
+            {/* CLIENT-SIDE INTERACTIVITY (Quiz & Buttons) */}
+            <TrialClientLogic trial={trial} sidebarMode={true} />
 
-            {/* --- NEW SECTION: COMPENSATION / COSTS (Right Sidebar) --- */}
+            {/* STIPEND INFO */}
             <div className="bg-white rounded-2xl shadow-sm border border-slate-200 p-6">
               <h4 className="font-bold text-slate-900 mb-4 flex items-center gap-2">
                 <Wallet className="h-4 w-4 text-emerald-600" /> Stipend & Costs
@@ -436,30 +200,31 @@ export default function TrialDetails() {
                   <div className="mt-0.5"><CheckCircle2 className="h-4 w-4 text-emerald-500" /></div>
                   <div>
                     <p className="text-sm font-semibold text-slate-800">No Cost to Participate</p>
-                    <p className="text-xs text-slate-500 leading-snug">All study-related medication and medical care are provided at no cost to you. Insurance is not required.</p>
+                    <p className="text-xs text-slate-500 leading-snug">Medication and care provided at no cost. No insurance needed.</p>
                   </div>
                 </div>
                 <div className="flex items-start gap-3">
                   <div className="mt-0.5"><CheckCircle2 className="h-4 w-4 text-emerald-500" /></div>
                   <div>
                     <p className="text-sm font-semibold text-slate-800">Compensation Available</p>
-                    <p className="text-xs text-slate-500 leading-snug">Qualified participants may receive reimbursement for time and travel for completed study visits.</p>
+                    <p className="text-xs text-slate-500 leading-snug">Reimbursement for time and travel for completed visits.</p>
                   </div>
                 </div>
               </div>
             </div>
 
-            {/* Locations Box */}
+            {/* LOCATION */}
             <div className="bg-white rounded-2xl shadow-sm border border-slate-200 p-6">
               <h4 className="font-bold text-slate-900 mb-4 flex items-center gap-2"><MapPin className="h-4 w-4 text-indigo-600" /> Locations</h4>
-              <div className="max-h-60 overflow-y-auto space-y-3 pr-2 scrollbar-thin scrollbar-thumb-slate-200">
+              <div className="max-h-60 overflow-y-auto space-y-3">
                 {trial.locations && trial.locations.length > 0 ? (
                   trial.locations.map((loc: any, idx: number) => (
                     <div key={idx} className="text-sm pb-2 border-b border-slate-50 last:border-0"><p className="font-medium text-slate-900">{loc.city}, {loc.state}</p></div>
                   ))
-                ) : <p className="text-sm text-slate-500">See ClinicalTrials.gov for locations.</p>}
+                ) : <p className="text-sm text-slate-500">See ClinicalTrials.gov</p>}
               </div>
             </div>
+
           </div>
         </div>
       </main>
