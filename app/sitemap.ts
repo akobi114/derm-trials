@@ -7,17 +7,16 @@ const supabase = createClient(
 );
 
 export default async function sitemap(): Promise<MetadataRoute.Sitemap> {
-  // 1. Define your base URL (Use your real Vercel domain here later)
-  // For now, we'll use a placeholder or environment variable if you have one.
-  const baseUrl = 'https://dermtrials.health'; // CHANGE THIS to your actual domain eventually
+  // FIXED: Your actual domain
+  const baseUrl = 'https://dermtrials.health';
 
-  // 2. Fetch all active trials
+  // 1. Fetch all active trials
   const { data: trials } = await supabase
     .from('trials')
     .select('nct_id, last_updated')
     .ilike('status', 'recruiting');
 
-  // 3. Generate URLs for each trial
+  // 2. Generate URLs for each trial
   const trialUrls = (trials || []).map((trial) => ({
     url: `${baseUrl}/trial/${trial.nct_id}`,
     lastModified: new Date(trial.last_updated || new Date()),
@@ -25,7 +24,7 @@ export default async function sitemap(): Promise<MetadataRoute.Sitemap> {
     priority: 0.8,
   }));
 
-  // 4. Define Static Pages (Home, Conditions, etc.)
+  // 3. Define Static Pages
   const staticPages = [
     {
       url: baseUrl,
