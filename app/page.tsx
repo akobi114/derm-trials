@@ -4,7 +4,7 @@ import { useEffect, useState } from 'react';
 import { supabase } from '@/lib/supabase';
 import Navbar from '@/components/Navbar';
 import TrialCard from '@/components/TrialCard';
-import { Search, MapPin, Sparkles, Globe, ShieldCheck, ArrowRight, ArrowLeft, Activity, ChevronRight, User, Star } from 'lucide-react';
+import { Search, MapPin, Sparkles, Globe, ShieldCheck, ArrowRight, ArrowLeft, Activity, ChevronRight, HelpCircle } from 'lucide-react'; // Added HelpCircle
 import Link from 'next/link';
 
 export default function Home() {
@@ -20,21 +20,20 @@ export default function Home() {
   const [featuredTrials, setFeaturedTrials] = useState<any[]>([]);
   const [popularConditions, setPopularConditions] = useState<string[]>([]);
 
-  // New States for "Smart Recommendations"
+  // Recommendation & Spelling States
   const [recommendations, setRecommendations] = useState<any[]>([]);
   const [recommendationTitle, setRecommendationTitle] = useState("");
+  const [spellingSuggestion, setSpellingSuggestion] = useState<string | null>(null);
 
   // --- INITIAL DATA FETCH ---
   useEffect(() => {
     async function getStatsAndFeatured() {
-      // 1. Get Count
       const { count } = await supabase
         .from('trials')
         .select('*', { count: 'exact', head: true })
         .ilike('status', 'recruiting');
       setRecruitingCount(count || 0);
 
-      // 2. Get Featured Carousel
       const { data: featuredData } = await supabase
         .from('trials')
         .select('*')
@@ -43,7 +42,6 @@ export default function Home() {
         .limit(6);
       setFeaturedTrials(featuredData || []);
 
-      // 3. Get Popular Conditions
       const { data: conditionData } = await supabase
         .from('trials')
         .select('condition');
@@ -56,28 +54,21 @@ export default function Home() {
     getStatsAndFeatured();
   }, []);
 
-  // --- SEARCH HANDLER ---
-  const handleSearch = async (e: React.FormEvent) => {
-    e.preventDefault();
-    
-    if (!query.trim() && !zipCode.trim()) return;
-    if (zipCode.trim() && zipCode.trim().length < 5) {
-      alert("Please enter a valid 5-digit Zip Code.");
-      return;
-    }
-
+  // --- SEARCH LOGIC (Extracted for reuse) ---
+  const performSearch = async (searchQuery: string, searchZip: string) => {
     setLoading(true);
     setHasSearched(true);
     setResults([]);
-    setRecommendations([]); // Reset backups
+    setRecommendations([]); 
+    setSpellingSuggestion(null); // Reset previous suggestions
 
     try {
       let lat = null;
       let lon = null;
 
       // 1. Get Coordinates
-      if (zipCode.trim()) {
-        const geoRes = await fetch(`https://api.zippopotam.us/us/${zipCode}`);
+      if (searchZip.trim()) {
+        const geoRes = await fetch(`https://api.zippopotam.us/us/${searchZip}`);
         if (geoRes.ok) {
           const geoData = await geoRes.json();
           lat = parseFloat(geoData.places[0].latitude);
@@ -87,55 +78,94 @@ export default function Home() {
         }
       }
 
-      // 2. Perform Primary Search
+      // 2. Primary Search
       let primaryResults: any[] = [];
+      const isNationwideSearch = distance >= 500;
       
-      if (lat && lon) {
+      if (lat && lon && !isNationwideSearch) {
         const { data, error } = await supabase.rpc('get_trials_nearby', {
           lat,
           long: lon,
           miles: distance,
-          search_term: query.trim() || null
+          search_term: searchQuery.trim() || null
         });
-        if (error) console.error(error);
-        primaryResults = data || [];
+        if (!error) primaryResults = data || [];
       } else {
         const { data, error } = await supabase
           .from('trials')
           .select('*')
-          .or(`title.ilike.%${query}%,condition.ilike.%${query}%`)
+          .or(`title.ilike.%${searchQuery}%,condition.ilike.%${searchQuery}%`)
           .limit(50);
-        if (error) console.error(error);
-        primaryResults = data || [];
+        if (!error) primaryResults = data || [];
       }
 
       setResults(primaryResults);
 
-      // 3. SMART FALLBACK LOGIC
-      // If we found nothing (or very few results), fetch recommendations
+      // --- 3. ZERO RESULTS LOGIC (Spelling & Recommendations) ---
       if (primaryResults.length === 0) {
+        
+        // A. Check for Spelling Mistakes (Fuzzy Match)
+        if (searchQuery.trim().length > 2) {
+          const { data: suggestionData } = await supabase.rpc('get_spelling_suggestion', {
+            search_term: searchQuery
+          });
+          
+          // If we found a suggestion that is NOT what they typed
+          if (suggestionData && suggestionData.length > 0) {
+            const bestMatch = suggestionData[0].suggestion;
+            if (bestMatch.toLowerCase() !== searchQuery.toLowerCase()) {
+              setSpellingSuggestion(bestMatch);
+            }
+          }
+        }
+
+        // B. Fetch Recommendations
+        let rawRecs: any[] = [];
         if (lat && lon) {
-          // Scenario A: User gave a Zip. Show EVERYTHING near that Zip.
           const { data: nearbyData } = await supabase.rpc('get_trials_nearby', {
             lat,
             long: lon,
-            miles: distance,
-            search_term: null // Null search term returns ALL trials in range
+            miles: distance, 
+            search_term: null 
           });
-          
-          if (nearbyData && nearbyData.length > 0) {
-            setRecommendations(nearbyData);
-            setRecommendationTitle(`Other Active Studies Near ${zipCode}`);
-          } else {
-            // If even nearby is empty, show National Featured
-            setRecommendations(featuredTrials);
-            setRecommendationTitle("New & Recruiting Studies (Nationwide)");
-          }
+          rawRecs = nearbyData || [];
+          setRecommendationTitle(`Other Active Studies Near ${searchZip}`);
         } else {
-          // Scenario B: No Zip provided. Show National Featured.
-          setRecommendations(featuredTrials);
-          setRecommendationTitle("Other Active Studies You Might Know Someone For");
+          rawRecs = featuredTrials;
+          setRecommendationTitle("New & Recruiting Studies (Nationwide)");
         }
+        setRecommendations(rawRecs.slice(0, 6));
+      } else {
+        // --- 4. RESULTS FOUND LOGIC (Recommendations Fallback) ---
+        // If results found, we still show recommendations, but we filter out duplicates
+        const primaryIds = new Set(primaryResults.map(r => r.id));
+        let finalRecs: any[] = [];
+        let finalTitle = "";
+
+        if (lat && lon) {
+          const { data: nearbyData } = await supabase.rpc('get_trials_nearby', {
+            lat,
+            long: lon,
+            miles: distance, 
+            search_term: null 
+          });
+          const uniqueNearby = (nearbyData || []).filter((r: any) => !primaryIds.has(r.id));
+          if (uniqueNearby.length > 0) {
+            finalRecs = uniqueNearby;
+            finalTitle = `Other Active Studies Near ${searchZip}`;
+          }
+        }
+
+        if (finalRecs.length === 0) {
+          const uniqueFeatured = featuredTrials.filter(r => !primaryIds.has(r.id));
+          if (uniqueFeatured.length > 0) {
+            finalRecs = uniqueFeatured;
+            finalTitle = "You Might Also Be Interested In";
+          }
+        }
+        
+        setRecommendations(finalRecs.slice(0, 6));
+        setRecommendationTitle(finalTitle);
       }
 
     } catch (err) {
@@ -145,11 +175,31 @@ export default function Home() {
     }
   };
 
+  // --- FORM HANDLER ---
+  const handleFormSubmit = (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!query.trim() && !zipCode.trim()) return;
+    if (zipCode.trim() && zipCode.trim().length < 5) {
+      alert("Please enter a valid 5-digit Zip Code.");
+      return;
+    }
+    performSearch(query, zipCode);
+  };
+
+  // --- SUGGESTION CLICK HANDLER ---
+  const applySuggestion = () => {
+    if (spellingSuggestion) {
+      setQuery(spellingSuggestion); // Update input box
+      performSearch(spellingSuggestion, zipCode); // Run new search
+    }
+  };
+
   const clearSearch = () => {
     setHasSearched(false);
     setQuery('');
     setZipCode('');
     setResults([]);
+    setSpellingSuggestion(null);
   };
 
   return (
@@ -158,7 +208,7 @@ export default function Home() {
 
       {!hasSearched ? (
         // ============================================================
-        // VIEW A: HOME PAGE
+        // VIEW A: PREMIUM HOME PAGE
         // ============================================================
         <>
           {/* HERO */}
@@ -186,7 +236,7 @@ export default function Home() {
               </p>
 
               <form 
-                onSubmit={handleSearch} 
+                onSubmit={handleFormSubmit} 
                 className="max-w-4xl mx-auto bg-white p-2 rounded-3xl md:rounded-full border border-slate-200 shadow-2xl shadow-indigo-100/50 flex flex-col md:flex-row items-center gap-2 animate-in fade-in slide-in-from-bottom-10 duration-700 delay-300"
               >
                 {/* Input 1 */}
@@ -300,24 +350,51 @@ export default function Home() {
 
           {loading ? (
              <div className="text-center py-20 text-slate-400">Loading...</div>
-          ) : results.length > 0 ? (
-            <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
-              {results.map((trial) => (<TrialCard key={trial.id} trial={trial} />))}
-            </div>
           ) : (
-            // --- NO RESULTS FALLBACK: SHOW RECOMMENDATIONS ---
-            <div className="space-y-12">
-              <div className="text-center py-16 bg-white rounded-2xl border border-slate-200 shadow-sm">
-                <div className="w-16 h-16 bg-slate-100 rounded-full flex items-center justify-center mx-auto mb-4 text-slate-400"><Search className="h-8 w-8" /></div>
-                <h3 className="text-xl font-bold text-slate-900 mb-2">No exact match found</h3>
-                <p className="text-slate-500 mb-8 max-w-md mx-auto">We couldn't find a trial specifically for "{query}" in this area right now.</p>
-                <button onClick={clearSearch} className="px-6 py-3 bg-indigo-600 text-white font-bold rounded-xl hover:bg-indigo-700 transition-colors shadow-md">Clear Search & Try Again</button>
-              </div>
+            <div className="space-y-16">
+              
+              {/* --- SPELLING SUGGESTION (Did you mean?) --- */}
+              {results.length === 0 && spellingSuggestion && (
+                <div className="bg-amber-50 border border-amber-100 p-4 rounded-xl flex items-center gap-3 animate-in fade-in slide-in-from-top-2">
+                  <HelpCircle className="h-5 w-5 text-amber-500" />
+                  <div className="text-amber-800">
+                    <span className="mr-1">Did you mean</span>
+                    <button 
+                      onClick={applySuggestion}
+                      className="font-bold underline hover:text-amber-900 focus:outline-none"
+                    >
+                      {spellingSuggestion}
+                    </button>
+                    <span>?</span>
+                  </div>
+                </div>
+              )}
 
+              {/* PRIMARY RESULTS (If Any) */}
+              {results.length > 0 ? (
+                <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
+                  {results.map((trial) => (<TrialCard key={trial.id} trial={trial} />))}
+                </div>
+              ) : (
+                // NO RESULTS STATE
+                <div className="text-center py-16 bg-white rounded-2xl border border-slate-200 shadow-sm">
+                  <div className="w-16 h-16 bg-slate-100 rounded-full flex items-center justify-center mx-auto mb-4 text-slate-400"><Search className="h-8 w-8" /></div>
+                  <h3 className="text-xl font-bold text-slate-900 mb-2">No exact match found</h3>
+                  <p className="text-slate-500 mb-8 max-w-md mx-auto">
+                    {zipCode 
+                      ? `We couldn't find a trial specifically for "${query}" near ${zipCode} right now.` 
+                      : `We couldn't find a trial matching "${query}" at this time.`
+                    }
+                  </p>
+                  <button onClick={clearSearch} className="px-6 py-3 bg-indigo-600 text-white font-bold rounded-xl hover:bg-indigo-700 transition-colors shadow-md">Clear Search & Try Again</button>
+                </div>
+              )}
+
+              {/* RECOMMENDATIONS (Always show if available) */}
               {recommendations.length > 0 && (
                 <div>
                   <div className="flex items-center gap-3 mb-6 p-4 bg-indigo-50 rounded-xl border border-indigo-100">
-                    <Sparkles className="h-5 w-5 text-indigo-600" />
+                    {zipCode ? <MapPin className="h-5 w-5 text-indigo-600" /> : <Sparkles className="h-5 w-5 text-indigo-600" />}
                     <div>
                       <h3 className="text-lg font-bold text-slate-900">{recommendationTitle}</h3>
                       <p className="text-sm text-slate-500">You may know someone who could benefit from these active studies.</p>

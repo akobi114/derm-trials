@@ -9,8 +9,11 @@ import {
   Users, Star, UserCheck, Phone, Mail, FileText, 
   Settings, ArrowRight, Loader2, 
   FlaskConical, X, BookOpen, CheckCircle2, XCircle, HelpCircle, 
-  Send, ChevronDown, ChevronRight, Save, AlertTriangle, PenLine, Undo2, User, Eye
+  Send, ChevronDown, ChevronRight, Save, AlertTriangle, PenLine, Undo2, User, Eye, Trash2
 } from "lucide-react";
+
+// 🔒 SECURITY: Replace this with the exact email you use to log in!
+const ADMIN_EMAIL = "akobic14@gmail.com"; 
 
 export default function PatientPipeline() {
   const router = useRouter();
@@ -19,22 +22,35 @@ export default function PatientPipeline() {
   const [authLoading, setAuthLoading] = useState(true);
   const [selectedLead, setSelectedLead] = useState<any>(null);
   
-  // Expanded sections state
-  const [expandedSections, setExpandedSections] = useState<string[]>(['review']);
+  // State for Researcher Notification Badge
+  const [pendingResearchers, setPendingResearchers] = useState(0);
   
+  const [expandedSections, setExpandedSections] = useState<string[]>(['review']);
   const [noteText, setNoteText] = useState("");
   const [savingNote, setSavingNote] = useState(false);
 
-  // --- 1. SECURITY CHECK ---
+  // --- 1. SECURITY CHECK (UPDATED) ---
   useEffect(() => {
     async function checkUser() {
       const { data: { user } } = await supabase.auth.getUser();
+      
+      // 1. Not logged in? -> Login Page
       if (!user) {
         router.push('/login');
-      } else {
-        setAuthLoading(false);
-        fetchLeads();
+        return;
       }
+
+      // 2. Logged in, but NOT the Admin? -> Kick to Home
+      if (user.email !== ADMIN_EMAIL) {
+        console.warn("Unauthorized access attempt by:", user.email);
+        router.push('/'); 
+        return;
+      }
+
+      // 3. Allowed -> Load Data
+      setAuthLoading(false);
+      fetchLeads();
+      fetchPendingResearchersCount(); 
     }
     checkUser();
   }, [router]);
@@ -80,13 +96,40 @@ export default function PatientPipeline() {
     setLoading(false);
   }
 
-  // --- 3. ACTIONS & LOGGING ---
+  async function fetchPendingResearchersCount() {
+    const { count, error } = await supabase
+      .from('researcher_profiles')
+      .select('*', { count: 'exact', head: true })
+      .eq('is_verified', false);
+    
+    if (!error && count !== null) {
+      setPendingResearchers(count);
+    }
+  }
+
+  // --- 3. ACTIONS ---
   const toggleSection = (section: string) => {
     setExpandedSections(prev => 
       prev.includes(section) 
         ? prev.filter(s => s !== section) // Close it
         : [...prev, section] // Open it
     );
+  };
+
+  const deleteLead = async (id: any) => {
+    if (!window.confirm("Are you sure you want to permanently delete this lead? This cannot be undone.")) return;
+
+    const previousLeads = [...leads];
+    setLeads(current => current.filter(l => l.id !== id));
+    if (selectedLead?.id === id) setSelectedLead(null);
+
+    const { error } = await supabase.from('leads').delete().eq('id', id);
+    
+    if (error) {
+      console.error("Delete failed:", error.message);
+      alert(`Failed to delete lead: ${error.message}. Check your database permissions.`);
+      setLeads(previousLeads);
+    }
   };
 
   const logAction = async (actionDescription: string) => {
@@ -110,20 +153,18 @@ export default function PatientPipeline() {
 
     if (!error) {
       setLeads(current => current.map(l => l.id === selectedLead.id ? { ...l, notes: updatedNotes } : l));
-      // FIXED: Explicitly type prev
       setSelectedLead((prev: any) => ({ ...prev, notes: updatedNotes }));
     }
   };
 
-  const updateLeadStatus = async (id: number, newStatus: string) => {
+  const updateLeadStatus = async (id: any, newStatus: string) => {
     setLeads(current => current.map(l => l.id === id ? { ...l, status: newStatus } : l));
-    // FIXED: Explicitly type prev
     if (selectedLead?.id === id) setSelectedLead((prev: any) => ({ ...prev, status: newStatus }));
     
     const { error } = await supabase.from('leads').update({ status: newStatus }).eq('id', id);
     if (error) {
       console.error("Database Update Failed:", error.message);
-      alert(`Error saving status. Check permissions.`);
+      alert(`Error saving status.`);
       fetchLeads();
     }
   };
@@ -134,48 +175,38 @@ export default function PatientPipeline() {
     const { error } = await supabase.from('leads').update({ notes: noteText }).eq('id', selectedLead.id);
     if (!error) {
       setLeads(current => current.map(l => l.id === selectedLead.id ? { ...l, notes: noteText } : l));
-      // FIXED: Explicitly type prev
       setSelectedLead((prev: any) => ({ ...prev, notes: noteText }));
     }
     setSavingNote(false);
   };
 
-  // --- 4. METRICS ---
+  // --- 4. RENDER ---
+  if (authLoading) return <div className="min-h-screen bg-slate-50 flex items-center justify-center"><Loader2 className="h-8 w-8 animate-spin text-indigo-600" /></div>;
+
   const totalLeads = leads.length;
   const strongLeadsCount = leads.filter(l => l.status.includes('Strong')).length;
   const sentCount = leads.filter(l => l.status === 'Sent to Site').length;
   const referredCount = leads.filter(l => l.status === 'Referred').length;
   const rejectedCount = leads.filter(l => l.status === 'Rejected').length;
-  
   const conversionRate = totalLeads > 0 ? ((referredCount / totalLeads) * 100).toFixed(1) : "0.0";
   const qualityScore = totalLeads > 0 ? ((strongLeadsCount / totalLeads) * 100).toFixed(0) : "0";
 
-  // --- 5. BUCKETS & SORTING ---
   const isNew = (s: string) => ['Strong Lead', 'Unlikely - Review Needed', 'New'].includes(s);
-  
-  const leadsToReview = leads
-    .filter(l => isNew(l.status))
-    .sort((a, b) => {
+  const leadsToReview = leads.filter(l => isNew(l.status)).sort((a, b) => {
       const isAStrong = a.status.includes('Strong');
       const isBStrong = b.status.includes('Strong');
       if (isAStrong && !isBStrong) return -1; 
       if (!isAStrong && isBStrong) return 1;  
       return 0; 
-    });
-
+  });
   const leadsPending = leads.filter(l => l.status === 'Pending');
   const leadsSent = leads.filter(l => l.status === 'Sent to Site');
   const leadsRejected = leads.filter(l => l.status === 'Rejected');
   const leadsReferred = leads.filter(l => l.status === 'Referred');
 
-  // --- 6. HELPERS ---
   const isDuplicate = (email: string) => email && leads.filter(l => l.email && l.email.toLowerCase() === email.toLowerCase()).length > 1;
-  
-  // FIXED: Added ': any' to 'lead' parameter in these 3 functions to fix build error
   const getRejectEmailLink = (lead: any) => `mailto:${lead.email}?subject=Update regarding your application for ${lead.trial_id}&body=Hi ${lead.name},%0D%0A%0D%0AThank you for your interest in the clinical trial: ${lead.trial_title}.%0D%0A%0D%0AUpon further review of your screener answers against the study protocols, we have determined that you do not meet the specific inclusion criteria required for this study at this time.%0D%0A%0D%0AWe appreciate you taking the time to apply.%0D%0A%0D%0ABest regards,%0D%0ADermTrials.Health`;
-  
   const getMoreInfoEmailLink = (lead: any) => `mailto:${lead.email}?subject=Additional information needed for ${lead.trial_id}&body=Hi ${lead.name},%0D%0A%0D%0AThank you for your interest in the clinical trial: ${lead.trial_title}.%0D%0A%0D%0ABased on your answers, we need a little more information to determine if you fully qualify for this study. Could you please clarify a few details regarding your medical history?%0D%0A%0D%0A[INSERT SPECIFIC QUESTION HERE]%0D%0A%0D%0ABest regards,%0D%0ADermTrials.Health`;
-  
   const getTrialCoordinatorEmailLink = (lead: any) => {
     let answersText = "";
     if (lead.trial_questions && lead.answers) {
@@ -187,8 +218,6 @@ export default function PatientPipeline() {
     const body = `Hello Study Coordinator,%0D%0A%0D%0AWe have a patient interested in your trial (${lead.trial_title}) who appears to meet the initial screening criteria.%0D%0A%0D%0AHere are their anonymized responses:%0D%0A%0D%0A------------------%0D%0A${answersText}------------------%0D%0A%0D%0AWould you be interested in connecting with this candidate?%0D%0A%0D%0ABest,%0D%0ADermTrials.Health`;
     return `mailto:coordinator@site.com?subject=${subject}&body=${body}`;
   };
-
-  if (authLoading) return <div className="min-h-screen bg-slate-50 flex items-center justify-center"><Loader2 className="h-8 w-8 animate-spin text-indigo-600" /></div>;
 
   return (
     <div className="min-h-screen bg-slate-50 pb-20">
@@ -202,8 +231,14 @@ export default function PatientPipeline() {
             <h1 className="text-3xl font-bold text-slate-900">Patient Pipeline</h1>
             <p className="text-slate-500">Manage incoming applications and eligibility reviews.</p>
           </div>
-          <Link href="/admin/system" className="flex items-center gap-2 px-5 py-2.5 bg-white border border-slate-200 text-slate-600 font-bold rounded-xl hover:bg-slate-50 hover:text-indigo-600 transition-all shadow-sm">
+          {/* UPDATED BUTTON WITH NOTIFICATION BADGE */}
+          <Link href="/admin/system" className="flex items-center gap-2 px-5 py-2.5 bg-white border border-slate-200 text-slate-600 font-bold rounded-xl hover:bg-slate-50 hover:text-indigo-600 transition-all shadow-sm relative">
             <Settings className="h-4 w-4" /> Go to System Ops <ArrowRight className="h-4 w-4" />
+            {pendingResearchers > 0 && (
+              <span className="absolute -top-2 -right-2 bg-red-500 text-white text-[10px] font-bold w-5 h-5 flex items-center justify-center rounded-full shadow-sm animate-bounce">
+                {pendingResearchers}
+              </span>
+            )}
           </Link>
         </div>
 
@@ -240,20 +275,20 @@ export default function PatientPipeline() {
         {/* PIPELINE SECTIONS */}
         <div className="space-y-6">
           <PipelineSection title="To Review" count={leadsToReview.length} color="indigo" isOpen={expandedSections.includes('review')} onToggle={() => toggleSection('review')}>
-            {leadsToReview.map(lead => <LeadCard key={lead.id} lead={lead} isDup={isDuplicate(lead.email)} onClick={() => { setSelectedLead(lead); setNoteText(lead.notes || ""); }} />)}
+            {leadsToReview.map(lead => <LeadCard key={lead.id} lead={lead} isDup={isDuplicate(lead.email)} onClick={() => { setSelectedLead(lead); setNoteText(lead.notes || ""); }} onDelete={deleteLead} />)}
             {leadsToReview.length === 0 && <EmptyState msg="Inbox zero! No new leads." />}
           </PipelineSection>
 
           <PipelineSection title="Pending Info" count={leadsPending.length} color="amber" isOpen={expandedSections.includes('pending')} onToggle={() => toggleSection('pending')}>
-            {leadsPending.map(lead => <LeadCard key={lead.id} lead={lead} isDup={isDuplicate(lead.email)} onClick={() => { setSelectedLead(lead); setNoteText(lead.notes || ""); }} />)}
+            {leadsPending.map(lead => <LeadCard key={lead.id} lead={lead} isDup={isDuplicate(lead.email)} onClick={() => { setSelectedLead(lead); setNoteText(lead.notes || ""); }} onDelete={deleteLead} />)}
           </PipelineSection>
 
           <PipelineSection title="Sent to Site" count={leadsSent.length} color="blue" isOpen={expandedSections.includes('sent')} onToggle={() => toggleSection('sent')}>
-            {leadsSent.map(lead => <LeadCard key={lead.id} lead={lead} isDup={isDuplicate(lead.email)} onClick={() => { setSelectedLead(lead); setNoteText(lead.notes || ""); }} />)}
+            {leadsSent.map(lead => <LeadCard key={lead.id} lead={lead} isDup={isDuplicate(lead.email)} onClick={() => { setSelectedLead(lead); setNoteText(lead.notes || ""); }} onDelete={deleteLead} />)}
           </PipelineSection>
 
           <PipelineSection title="Referred / Completed" count={leadsReferred.length} color="emerald" isOpen={expandedSections.includes('referred')} onToggle={() => toggleSection('referred')}>
-            {leadsReferred.map(lead => <LeadCard key={lead.id} lead={lead} isDup={isDuplicate(lead.email)} onClick={() => { setSelectedLead(lead); setNoteText(lead.notes || ""); }} />)}
+            {leadsReferred.map(lead => <LeadCard key={lead.id} lead={lead} isDup={isDuplicate(lead.email)} onClick={() => { setSelectedLead(lead); setNoteText(lead.notes || ""); }} onDelete={deleteLead} />)}
           </PipelineSection>
 
           <div className="pt-8 border-t border-slate-200">
@@ -263,14 +298,14 @@ export default function PatientPipeline() {
              </button>
              {expandedSections.includes('rejected') && (
                <div className="mt-4 opacity-75">
-                 {leadsRejected.map(lead => <LeadCard key={lead.id} lead={lead} isDup={isDuplicate(lead.email)} onClick={() => { setSelectedLead(lead); setNoteText(lead.notes || ""); }} />)}
+                 {leadsRejected.map(lead => <LeadCard key={lead.id} lead={lead} isDup={isDuplicate(lead.email)} onClick={() => { setSelectedLead(lead); setNoteText(lead.notes || ""); }} onDelete={deleteLead} />)}
                </div>
              )}
           </div>
         </div>
       </main>
 
-      {/* --- MODAL: WORKSPACE (3-COLUMN LAYOUT) --- */}
+      {/* --- MODAL: WORKSPACE --- */}
       {selectedLead && (
         <div className="fixed inset-0 z-50 flex items-center justify-center p-4 animate-in fade-in duration-200">
           <div className="absolute inset-0 bg-slate-900/60 backdrop-blur-sm" onClick={() => setSelectedLead(null)}></div>
@@ -311,12 +346,7 @@ export default function PatientPipeline() {
                     <option value="Unlikely - Review Needed">New - Needs Review</option>
                     <option value="Pending">Pending Info</option>
                     <option value="Sent to Site">Sent to Site</option>
-                    <option 
-                      value="Referred" 
-                      className="text-emerald-700 font-bold"
-                    >
-                      Referred (Success)
-                    </option>
+                    <option value="Referred" className="text-emerald-700 font-bold">Referred (Success)</option>
                     <option value="Rejected">Rejected</option>
                   </select>
                 </div>
@@ -324,15 +354,12 @@ export default function PatientPipeline() {
               <button onClick={() => setSelectedLead(null)} className="text-slate-400 hover:text-slate-600"><X className="h-6 w-6" /></button>
             </div>
 
-            {/* Split View Body */}
+            {/* Body */}
             <div className="flex-1 overflow-hidden flex flex-col lg:flex-row">
-              
-              {/* LEFT: Internal Notes (25%) */}
+              {/* Internal Notes */}
               <div className="w-full lg:w-1/4 bg-yellow-50/30 border-b lg:border-b-0 lg:border-r border-slate-100 flex flex-col">
                 <div className="p-4 border-b border-yellow-100/50">
-                  <h4 className="text-xs font-bold uppercase text-amber-600 mb-1 flex items-center gap-2">
-                    <PenLine className="h-3 w-3" /> Internal Notes
-                  </h4>
+                  <h4 className="text-xs font-bold uppercase text-amber-600 mb-1 flex items-center gap-2"><PenLine className="h-3 w-3" /> Internal Notes</h4>
                   {savingNote && <span className="text-[10px] text-amber-500 animate-pulse">Saving...</span>}
                 </div>
                 <textarea 
@@ -344,7 +371,7 @@ export default function PatientPipeline() {
                 />
               </div>
 
-              {/* CENTER: Answers (37.5%) */}
+              {/* Answers */}
               <div className="w-full lg:w-[37.5%] p-6 overflow-y-auto border-b lg:border-b-0 lg:border-r border-slate-100">
                 <h4 className="text-xs font-bold uppercase text-indigo-500 mb-4 flex items-center gap-2"><UserCheck className="h-4 w-4" /> Patient Answers</h4>
                 <div className="space-y-4">
@@ -366,7 +393,7 @@ export default function PatientPipeline() {
                 </div>
               </div>
 
-              {/* RIGHT: Criteria (37.5%) */}
+              {/* Criteria */}
               <div className="w-full lg:w-[37.5%] p-6 overflow-y-auto bg-slate-50/50">
                 <h4 className="text-xs font-bold uppercase text-slate-500 mb-4 flex items-center gap-2"><BookOpen className="h-4 w-4" /> Reference Criteria</h4>
                 <div className="bg-white p-4 rounded-xl border border-slate-200 shadow-sm">
@@ -375,75 +402,27 @@ export default function PatientPipeline() {
               </div>
             </div>
 
-            {/* ACTION FOOTER */}
+            {/* Footer */}
             <div className="p-4 border-t border-slate-100 bg-white shrink-0 grid grid-cols-1 md:grid-cols-4 gap-4">
-              
-              {/* ZONE 1: REJECT */}
               <div className="flex flex-col gap-2 p-3 bg-red-50/50 rounded-xl border border-red-100">
                 <span className="text-[10px] font-bold uppercase text-red-400 tracking-wider">Rejection</span>
-                <a 
-                  href={getRejectEmailLink(selectedLead)} 
-                  onClick={() => logAction("Draft opened: Rejection Email")}
-                  className="w-full py-2 bg-white border border-red-200 text-red-600 font-bold rounded-lg hover:bg-red-50 text-center text-xs flex items-center justify-center gap-2"
-                >
-                  <Mail className="h-3 w-3" /> Draft Email
-                </a>
-                <button onClick={() => updateLeadStatus(selectedLead.id, 'Rejected')} className="w-full py-2 bg-red-600 text-white font-bold rounded-lg hover:bg-red-700 text-center text-xs flex items-center justify-center gap-2 shadow-sm">
-                  <XCircle className="h-3 w-3" /> Move to Rejected
-                </button>
+                <a href={getRejectEmailLink(selectedLead)} onClick={() => logAction("Draft opened: Rejection Email")} className="w-full py-2 bg-white border border-red-200 text-red-600 font-bold rounded-lg hover:bg-red-50 text-center text-xs flex items-center justify-center gap-2"><Mail className="h-3 w-3" /> Draft Email</a>
+                <button onClick={() => updateLeadStatus(selectedLead.id, 'Rejected')} className="w-full py-2 bg-red-600 text-white font-bold rounded-lg hover:bg-red-700 text-center text-xs flex items-center justify-center gap-2 shadow-sm"><XCircle className="h-3 w-3" /> Move to Rejected</button>
               </div>
-
-              {/* ZONE 2: INFO */}
               <div className="flex flex-col gap-2 p-3 bg-amber-50/50 rounded-xl border border-amber-100">
                 <span className="text-[10px] font-bold uppercase text-amber-400 tracking-wider">More Info</span>
-                <a 
-                  href={getMoreInfoEmailLink(selectedLead)} 
-                  onClick={() => logAction("Draft opened: Info Request Email")}
-                  className="w-full py-2 bg-white border border-amber-200 text-amber-600 font-bold rounded-lg hover:bg-amber-50 text-center text-xs flex items-center justify-center gap-2"
-                >
-                  <Mail className="h-3 w-3" /> Draft Email
-                </a>
-                <button onClick={() => updateLeadStatus(selectedLead.id, 'Pending')} className="w-full py-2 bg-amber-500 text-white font-bold rounded-lg hover:bg-amber-600 text-center text-xs flex items-center justify-center gap-2 shadow-sm">
-                  <HelpCircle className="h-3 w-3" /> Move to Pending
-                </button>
+                <a href={getMoreInfoEmailLink(selectedLead)} onClick={() => logAction("Draft opened: Info Request Email")} className="w-full py-2 bg-white border border-amber-200 text-amber-600 font-bold rounded-lg hover:bg-amber-50 text-center text-xs flex items-center justify-center gap-2"><Mail className="h-3 w-3" /> Draft Email</a>
+                <button onClick={() => updateLeadStatus(selectedLead.id, 'Pending')} className="w-full py-2 bg-amber-500 text-white font-bold rounded-lg hover:bg-amber-600 text-center text-xs flex items-center justify-center gap-2 shadow-sm"><HelpCircle className="h-3 w-3" /> Move to Pending</button>
               </div>
-
-              {/* ZONE 3: SITE */}
               <div className="flex flex-col gap-2 p-3 bg-blue-50/50 rounded-xl border border-blue-100">
                 <span className="text-[10px] font-bold uppercase text-blue-400 tracking-wider">Trial Site</span>
-                <a 
-                  href={getTrialCoordinatorEmailLink(selectedLead)} 
-                  onClick={() => logAction("Draft opened: Trial Coordinator Email")}
-                  className="w-full py-2 bg-white border border-blue-200 text-blue-600 font-bold rounded-lg hover:bg-blue-50 text-center text-xs flex items-center justify-center gap-2"
-                >
-                  <Mail className="h-3 w-3" /> Draft Email
-                </a>
-                {/* HIDE if already sent */}
-                {selectedLead.status !== 'Sent to Site' && selectedLead.status !== 'Referred' && (
-                  <button onClick={() => updateLeadStatus(selectedLead.id, 'Sent to Site')} className="w-full py-2 bg-blue-600 text-white font-bold rounded-lg hover:bg-blue-700 text-center text-xs flex items-center justify-center gap-2 shadow-sm">
-                    <Send className="h-3 w-3" /> Move to Sent
-                  </button>
-                )}
+                <a href={getTrialCoordinatorEmailLink(selectedLead)} onClick={() => logAction("Draft opened: Trial Coordinator Email")} className="w-full py-2 bg-white border border-blue-200 text-blue-600 font-bold rounded-lg hover:bg-blue-50 text-center text-xs flex items-center justify-center gap-2"><Mail className="h-3 w-3" /> Draft Email</a>
+                {selectedLead.status !== 'Sent to Site' && selectedLead.status !== 'Referred' && <button onClick={() => updateLeadStatus(selectedLead.id, 'Sent to Site')} className="w-full py-2 bg-blue-600 text-white font-bold rounded-lg hover:bg-blue-700 text-center text-xs flex items-center justify-center gap-2 shadow-sm"><Send className="h-3 w-3" /> Move to Sent</button>}
               </div>
-
-              {/* ZONE 4: MISC */}
               <div className="flex flex-col gap-2 justify-end">
-                {/* CHANGED: ENABLED EVERYWHERE except final stages */}
-                {selectedLead.status !== 'Referred' && selectedLead.status !== 'Rejected' ? (
-                   <button onClick={() => updateLeadStatus(selectedLead.id, 'Referred')} className="w-full py-2 bg-emerald-600 text-white font-bold rounded-lg hover:bg-emerald-700 text-center text-xs flex items-center justify-center gap-2 shadow-md mb-auto h-full">
-                     <CheckCircle2 className="h-4 w-4" /> Mark Referred
-                   </button>
-                ) : (selectedLead.status === 'Rejected' || selectedLead.status === 'Referred' ? (
-                   <button onClick={() => updateLeadStatus(selectedLead.id, 'Strong Lead')} className="w-full py-2 bg-white border border-slate-300 text-slate-500 font-bold rounded-lg hover:text-slate-700 text-center text-xs flex items-center justify-center gap-2 mb-auto">
-                     <Undo2 className="h-3 w-3" /> Reset Status
-                   </button>
-                ) : <div className="flex-1"></div>)}
-                
-                <button onClick={() => setSelectedLead(null)} className="w-full py-2 bg-slate-800 text-white font-bold rounded-lg hover:bg-slate-900 text-center text-xs">
-                  Close
-                </button>
+                {selectedLead.status !== 'Referred' && selectedLead.status !== 'Rejected' ? <button onClick={() => updateLeadStatus(selectedLead.id, 'Referred')} className="w-full py-2 bg-emerald-600 text-white font-bold rounded-lg hover:bg-emerald-700 text-center text-xs flex items-center justify-center gap-2 shadow-md mb-auto h-full"><CheckCircle2 className="h-4 w-4" /> Mark Referred</button> : <button onClick={() => updateLeadStatus(selectedLead.id, 'Strong Lead')} className="w-full py-2 bg-white border border-slate-300 text-slate-500 font-bold rounded-lg hover:text-slate-700 text-center text-xs flex items-center justify-center gap-2 mb-auto"><Undo2 className="h-3 w-3" /> Reset Status</button>}
+                <button onClick={() => setSelectedLead(null)} className="w-full py-2 bg-slate-800 text-white font-bold rounded-lg hover:bg-slate-900 text-center text-xs">Close</button>
               </div>
-
             </div>
           </div>
         </div>
@@ -452,7 +431,6 @@ export default function PatientPipeline() {
   );
 }
 
-// --- HELPERS ---
 function PipelineSection({ title, count, color, children, isOpen, onToggle }: any) {
   const colorClasses: any = { indigo: "bg-indigo-50 text-indigo-700 border-indigo-100", amber: "bg-amber-50 text-amber-700 border-amber-100", blue: "bg-blue-50 text-blue-700 border-blue-100", emerald: "bg-emerald-50 text-emerald-700 border-emerald-100" };
   return (
@@ -469,46 +447,35 @@ function PipelineSection({ title, count, color, children, isOpen, onToggle }: an
   );
 }
 
-// MODIFIED: Added dynamic highlighting based on 'Strong Lead' status
-function LeadCard({ lead, isDup, onClick }: any) {
+// LEAD CARD with Delete Button
+function LeadCard({ lead, isDup, onClick, onDelete }: any) {
   const isStrong = lead.status.includes('Strong');
   const needsReview = !isStrong && ['New', 'Unlikely - Review Needed'].includes(lead.status);
 
   return (
-    <div 
-      onClick={onClick} 
-      className={`p-4 rounded-xl border shadow-sm hover:shadow-md transition-all cursor-pointer flex items-center justify-between group relative 
-        ${isStrong 
-          ? 'bg-emerald-50 border-emerald-200 hover:border-emerald-400'  
-          : 'bg-white border-slate-200 hover:border-indigo-200'           
-        }`}
-    >
-      {isDup && <div className="absolute -top-2 -right-2 bg-red-500 text-white text-[10px] font-bold px-2 py-1 rounded-full shadow-sm z-10 flex items-center gap-1"><AlertTriangle className="h-3 w-3" /> Duplicate</div>}
+    <div onClick={onClick} className={`p-4 rounded-xl border shadow-sm hover:shadow-md transition-all cursor-pointer flex items-center justify-between group relative ${isStrong ? 'bg-emerald-50 border-emerald-200 hover:border-emerald-400' : 'bg-white border-slate-200 hover:border-indigo-200'}`}>
       
-      <div className="flex items-center gap-4 flex-1 min-w-0">
-        <div className={`w-10 h-10 rounded-full flex items-center justify-center shrink-0 ${isStrong ? 'bg-emerald-100 text-emerald-600' : 'bg-slate-100 text-slate-500'}`}>
-          {isStrong ? <Star className="h-5 w-5" /> : <Users className="h-5 w-5" />}
-        </div>
-        
-        <div className="flex-1 min-w-0">
-          <div className="flex items-center gap-2 mb-1">
-            <h4 className={`font-bold truncate ${isStrong ? 'text-emerald-900' : 'text-slate-900'}`}>{lead.name}</h4>
-            {/* BADGES */}
-            {isStrong && <span className="text-[10px] font-bold bg-emerald-100 text-emerald-700 px-2 py-0.5 rounded border border-emerald-200 uppercase tracking-wide">AI Match</span>}
-            {needsReview && <span className="text-[10px] font-bold bg-indigo-50 text-indigo-600 px-2 py-0.5 rounded border border-indigo-100 uppercase tracking-wide">Review Needed</span>}
-          </div>
-          
-          <div className="text-xs text-slate-500">
-            <p className="font-medium text-slate-700 mb-0.5 leading-snug break-words">{lead.trial_title}</p>
-            <p className="text-slate-400">Applied: {new Date(lead.created_at).toLocaleDateString()}</p>
-          </div>
-        </div>
-      </div>
+      {/* DELETE BUTTON */}
+      <button 
+        onClick={(e) => {
+          e.stopPropagation(); 
+          onDelete(lead.id);
+        }}
+        className="absolute top-2 right-2 p-1.5 text-slate-400 hover:text-red-500 hover:bg-red-50 rounded-full opacity-0 group-hover:opacity-100 transition-all z-20"
+        title="Delete Lead"
+      >
+        <Trash2 className="h-4 w-4" />
+      </button>
 
-      <div className="flex items-center gap-3 pl-4 border-l border-slate-100/50">
-        {lead.notes && <FileText className="h-4 w-4 text-amber-400" />}
-        <ChevronRight className={`h-5 w-5 transition-colors ${isStrong ? 'text-emerald-300 group-hover:text-emerald-600' : 'text-slate-300 group-hover:text-indigo-500'}`} />
+      {isDup && <div className="absolute -top-2 -right-2 bg-red-500 text-white text-[10px] font-bold px-2 py-1 rounded-full shadow-sm z-10 flex items-center gap-1"><AlertTriangle className="h-3 w-3" /> Duplicate</div>}
+      <div className="flex items-center gap-4 flex-1 min-w-0">
+        <div className={`w-10 h-10 rounded-full flex items-center justify-center shrink-0 ${isStrong ? 'bg-emerald-100 text-emerald-600' : 'bg-slate-100 text-slate-500'}`}>{isStrong ? <Star className="h-5 w-5" /> : <Users className="h-5 w-5" />}</div>
+        <div className="flex-1 min-w-0">
+          <div className="flex items-center gap-2 mb-1"><h4 className={`font-bold truncate ${isStrong ? 'text-emerald-900' : 'text-slate-900'}`}>{lead.name}</h4>{isStrong && <span className="text-[10px] font-bold bg-emerald-100 text-emerald-700 px-2 py-0.5 rounded border border-emerald-200 uppercase tracking-wide">AI Match</span>}{needsReview && <span className="text-[10px] font-bold bg-indigo-50 text-indigo-600 px-2 py-0.5 rounded border border-indigo-100 uppercase tracking-wide">Review Needed</span>}</div>
+          <div className="text-xs text-slate-500"><p className="font-medium text-slate-700 mb-0.5 leading-snug break-words">{lead.trial_title}</p><p className="text-slate-400">Applied: {new Date(lead.created_at).toLocaleDateString()}</p></div>
+        </div>
       </div>
+      <div className="flex items-center gap-3 pl-4 border-l border-slate-100/50">{lead.notes && <FileText className="h-4 w-4 text-amber-400" />}<ChevronRight className={`h-5 w-5 transition-colors ${isStrong ? 'text-emerald-300 group-hover:text-emerald-600' : 'text-slate-300 group-hover:text-indigo-500'}`} /></div>
     </div>
   );
 }

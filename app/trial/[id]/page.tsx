@@ -2,15 +2,15 @@ import { createClient } from '@supabase/supabase-js';
 import Link from 'next/link';
 import { notFound } from 'next/navigation';
 import Navbar from '@/components/Navbar';
-import type { Metadata, ResolvingMetadata } from 'next'; // Import Types
+import type { Metadata, ResolvingMetadata } from 'next'; 
 import { 
-  ArrowRight, CheckCircle2, FlaskConical, Wallet, 
+  ArrowRight, CheckCircle2, Wallet, 
   HeartHandshake, Star, Info, MapPin, Building2, 
-  ArrowLeft, BookOpen, FileText, ShieldCheck, ChevronDown, 
-  Lock, ClipboardCheck 
+  ArrowLeft, UserCheck, Play, MessageCircle, Image as ImageIcon,
+  ShieldCheck, Lock, Stethoscope, Crown
 } from 'lucide-react';
 import ReactMarkdown from 'react-markdown';
-import TrialClientLogic from '@/components/TrialClientLogic'; // We will move the client logic here
+import TrialClientLogic from '@/components/TrialClientLogic'; 
 
 // Initialize Supabase
 const supabase = createClient(
@@ -31,89 +31,121 @@ export async function generateMetadata(
 ): Promise<Metadata> {
   const { id } = await params;
   
-  // Fetch trial for SEO
+  // Fetch Base
   const { data: trial } = await supabase.from('trials').select('*').eq('nct_id', id).single();
+  if (!trial) return { title: 'Trial Not Found' };
 
-  if (!trial) {
-    return { title: 'Trial Not Found' };
-  }
+  // Fetch Override
+  const { data: claim } = await supabase.from('claimed_trials').select('custom_brief_summary').eq('nct_id', id).single();
 
-  const title = `${trial.condition || 'Dermatology'} Clinical Trial in ${trial.locations?.[0]?.city || 'Phoenix'} | DermTrials`;
-  const desc = `Join a paid research study for ${trial.condition}. ${trial.title}. Check your eligibility now.`;
+  const summaryToUse = claim?.custom_brief_summary || trial.simple_summary || trial.brief_summary || "";
+  const cityList = trial.locations ? trial.locations.slice(0, 2).map((l: any) => l.city).join(', ') : 'Phoenix';
 
   return {
-    title: title,
-    description: desc,
-    openGraph: {
-      title: title,
-      description: desc,
-      // You can eventually add a dynamic image here
-      images: ['/og-default.png'], 
-    },
+    title: `${trial.condition || 'Clinical'} Trial in ${cityList} | DermTrials`,
+    description: summaryToUse.substring(0, 150) + "...",
   };
+}
+
+// --- HELPER: VIDEO PLAYER ---
+function VideoPlayer({ url }: { url: string }) {
+  if (!url) return null;
+  let embedUrl = url;
+  if (url.includes('youtube.com') || url.includes('youtu.be')) {
+    const videoId = url.split('v=')[1]?.split('&')[0] || url.split('/').pop();
+    embedUrl = `https://www.youtube.com/embed/${videoId}?modestbranding=1&rel=0`;
+  } else if (url.includes('vimeo.com')) {
+    const videoId = url.split('/').pop();
+    embedUrl = `https://player.vimeo.com/video/${videoId}`;
+  } else if (url.includes('loom.com')) {
+    embedUrl = url.replace('/share/', '/embed/');
+  }
+
+  return (
+    <div className="mb-8 rounded-2xl overflow-hidden shadow-lg aspect-video bg-black">
+      <iframe src={embedUrl} className="w-full h-full" allowFullScreen allow="autoplay; encrypted-media"></iframe>
+    </div>
+  );
 }
 
 // --- 2. SERVER COMPONENT ---
 export default async function TrialDetail({ params }: Props) {
   const { id } = await params;
 
-  const { data: trial, error } = await supabase
-    .from('trials')
-    .select('*')
+  // A. Fetch Base Data
+  const { data: trial, error } = await supabase.from('trials').select('*').eq('nct_id', id).single();
+  if (error || !trial) notFound();
+
+  // B. Fetch Researcher Customizations + TIER STATUS
+  const { data: claim } = await supabase
+    .from('claimed_trials')
+    .select(`
+      custom_brief_summary, 
+      custom_screener_questions, 
+      video_url, 
+      custom_faq, 
+      facility_photos,
+      researcher_profiles (
+        tier
+      )
+    `)
     .eq('nct_id', id)
     .single();
 
-  if (error || !trial) {
-    notFound();
+  // C. MERGE LOGIC & TIER CHECK
+  let isCustomSummary = false;
+  // Safely access tier (Typescript workaround for nested Supabase join)
+  const tier = (claim as any)?.researcher_profiles?.tier || 'free';
+  const isPro = tier === 'pro';
+
+  if (claim) {
+    if (claim.custom_brief_summary) {
+        trial.simple_summary = claim.custom_brief_summary;
+        isCustomSummary = true;
+    }
+    if (claim.custom_screener_questions && claim.custom_screener_questions.length > 0) {
+        trial.screener_questions = claim.custom_screener_questions;
+    }
   }
 
-  // Helper for status styling
-  const getStatusStyle = (status: string) => {
-    const s = (status || "").toLowerCase().trim();
-    if (s === 'recruiting') return { badge: "bg-emerald-50 text-emerald-700 ring-emerald-600/20", dot: "bg-emerald-500", glow: true };
-    return { badge: "bg-slate-50 text-slate-600 ring-slate-500/10", dot: "bg-slate-400", glow: false };
-  };
-  const statusStyle = getStatusStyle(trial.status);
-  const isRecruiting = trial.status && trial.status.toLowerCase().trim() === 'recruiting';
+  const statusStyle = trial.status?.toLowerCase() === 'recruiting' 
+    ? { badge: "bg-emerald-50 text-emerald-700 ring-emerald-600/20", dot: "bg-emerald-500", glow: true }
+    : { badge: "bg-slate-50 text-slate-600 ring-slate-500/10", dot: "bg-slate-400", glow: false };
+
+  // D. DYNAMIC BACKGROUND (Premium Hue vs Standard)
+  const bgClass = isPro 
+    ? "bg-gradient-to-br from-indigo-50/40 via-white to-amber-50/20" 
+    : "bg-slate-50";
+
+  const cardClass = isPro
+    ? "bg-white rounded-2xl shadow-md border border-indigo-100 ring-1 ring-indigo-50/50 p-8 mb-8 relative overflow-hidden"
+    : "bg-white rounded-2xl shadow-sm border border-slate-200 p-8 mb-8";
 
   return (
-    <div className="min-h-screen bg-slate-50 font-sans pb-20">
+    <div className={`min-h-screen font-sans pb-20 ${bgClass}`}>
       <Navbar />
-
-      {/* --- STRUCTURED DATA (SCHEMA.ORG) FOR GOOGLE --- */}
-      <script
-        type="application/ld+json"
-        dangerouslySetInnerHTML={{
-          __html: JSON.stringify({
-            "@context": "https://schema.org",
-            "@type": "MedicalStudy",
-            "name": trial.title,
-            "status": trial.status,
-            "healthCondition": trial.condition,
-            "sponsor": { "@type": "Organization", "name": trial.sponsor },
-            "location": {
-                "@type": "Place",
-                "name": "DermTrials Site",
-                "address": {
-                    "@type": "PostalAddress",
-                    "addressLocality": trial.locations?.[0]?.city || "Phoenix",
-                    "addressRegion": trial.locations?.[0]?.state || "AZ"
-                }
-            }
-          })
-        }}
-      />
 
       <main className="max-w-5xl mx-auto px-6 py-10">
         
-        {/* BACK LINK */}
         <Link href="/" className="inline-flex items-center text-sm font-medium text-slate-500 hover:text-indigo-600 mb-8 transition-colors">
           <ArrowLeft className="mr-2 h-4 w-4" /> Back to Search
         </Link>
 
         {/* HEADER */}
-        <div className="bg-white rounded-2xl shadow-sm border border-slate-200 p-8 mb-8">
-          <div className="flex flex-wrap gap-3 mb-5">
+        <div className={cardClass}>
+          {/* PREMIUM DECORATION */}
+          {isPro && (
+             <div className="absolute top-0 right-0 p-4 opacity-10 pointer-events-none">
+                <Crown className="w-32 h-32 text-amber-400 -mr-8 -mt-8 rotate-12" />
+             </div>
+          )}
+
+          <div className="flex flex-wrap items-center gap-3 mb-5 relative z-10">
+            {isPro && (
+                <span className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full text-[10px] font-bold uppercase tracking-wide bg-gradient-to-r from-amber-100 to-amber-50 text-amber-700 border border-amber-100 shadow-sm">
+                    <Crown className="h-3 w-3" /> Featured Study
+                </span>
+            )}
             <span className={`inline-flex items-center gap-1.5 px-3 py-1 rounded-full text-xs font-bold uppercase tracking-wide ring-1 ring-inset ${statusStyle.badge}`}>
               <span className={`relative flex h-2 w-2`}>
                 {statusStyle.glow && <span className={`animate-ping absolute inline-flex h-full w-full rounded-full opacity-75 ${statusStyle.dot}`}></span>}
@@ -125,10 +157,11 @@ export default async function TrialDetail({ params }: Props) {
               {trial.phase}
             </span>
           </div>
-          <h1 className="text-2xl md:text-3xl font-bold text-slate-900 mb-4 leading-tight">
+
+          <h1 className="text-2xl md:text-3xl font-bold text-slate-900 mb-4 leading-tight relative z-10">
             {trial.simple_title || trial.title}
           </h1>
-          <div className="flex flex-col md:flex-row md:items-center gap-4 text-sm text-slate-500 pt-4 border-t border-slate-100 mt-6">
+          <div className="flex flex-col md:flex-row md:items-center gap-4 text-sm text-slate-500 pt-4 border-t border-slate-100 mt-6 relative z-10">
             <div className="flex items-center gap-2">
               <Building2 className="h-4 w-4 text-slate-400" />
               <span className="font-medium text-slate-900">{trial.sponsor}</span>
@@ -142,16 +175,21 @@ export default async function TrialDetail({ params }: Props) {
 
         <div className="grid grid-cols-1 lg:grid-cols-3 gap-8">
           
-          {/* --- LEFT COLUMN: CONTENT --- */}
+          {/* --- LEFT COLUMN --- */}
           <div className="lg:col-span-2 space-y-8">
             
-            {/* AI OVERVIEW */}
+            {/* 1. VIDEO (If Researcher added one AND is Pro - double check logic handled in dashboard) */}
+            {claim?.video_url && <VideoPlayer url={claim.video_url} />}
+
+            {/* 2. OVERVIEW */}
             <section className="bg-white rounded-2xl shadow-sm border border-slate-200 p-8 relative"> 
               <div className="flex items-center gap-3 mb-4">
-                <div className="p-2 bg-indigo-100 text-indigo-600 rounded-lg">
-                  <Star className="h-6 w-6" />
+                <div className={`p-2 rounded-lg ${isCustomSummary ? 'bg-emerald-100 text-emerald-600' : 'bg-indigo-100 text-indigo-600'}`}>
+                  {isCustomSummary ? <UserCheck className="h-6 w-6" /> : <Star className="h-6 w-6" />}
                 </div>
-                <h2 className="text-xl font-bold text-slate-900">AI Powered Overview</h2>
+                <h2 className="text-xl font-bold text-slate-900">
+                  {isCustomSummary ? "Study Overview" : "AI Powered Overview"}
+                </h2>
               </div>
               <div className="text-slate-700 text-sm leading-7">
                 {trial.simple_summary ? (
@@ -162,7 +200,60 @@ export default async function TrialDetail({ params }: Props) {
               </div>
             </section>
 
-            {/* BENEFITS (IRB SAFE) */}
+            {/* 3. SAFETY & TRUST BLOCK */}
+            <section className="grid grid-cols-1 sm:grid-cols-3 gap-4">
+                <div className="bg-white p-4 rounded-xl border border-slate-200 shadow-sm flex flex-col items-center text-center">
+                    <div className="w-10 h-10 bg-blue-50 text-blue-600 rounded-full flex items-center justify-center mb-3"><ShieldCheck className="h-5 w-5" /></div>
+                    <h4 className="font-bold text-slate-900 text-sm">IRB Approved</h4>
+                    <p className="text-[10px] text-slate-500 mt-1">Ethical oversight & safety review.</p>
+                </div>
+                <div className="bg-white p-4 rounded-xl border border-slate-200 shadow-sm flex flex-col items-center text-center">
+                    <div className="w-10 h-10 bg-emerald-50 text-emerald-600 rounded-full flex items-center justify-center mb-3"><Lock className="h-5 w-5" /></div>
+                    <h4 className="font-bold text-slate-900 text-sm">HIPAA Compliant</h4>
+                    <p className="text-[10px] text-slate-500 mt-1">Your data is secure & private.</p>
+                </div>
+                <div className="bg-white p-4 rounded-xl border border-slate-200 shadow-sm flex flex-col items-center text-center">
+                    <div className="w-10 h-10 bg-indigo-50 text-indigo-600 rounded-full flex items-center justify-center mb-3"><Stethoscope className="h-5 w-5" /></div>
+                    <h4 className="font-bold text-slate-900 text-sm">Expert Care</h4>
+                    <p className="text-[10px] text-slate-500 mt-1">Monitored by medical specialists.</p>
+                </div>
+            </section>
+
+            {/* 4. FACILITY PHOTOS */}
+            {claim?.facility_photos?.length > 0 && (
+                <section className="bg-white rounded-2xl shadow-sm border border-slate-200 p-8">
+                    <h3 className="text-lg font-bold text-slate-900 mb-4 flex items-center gap-2"><ImageIcon className="h-5 w-5 text-indigo-600" /> Facility & Staff</h3>
+                    <div className="grid grid-cols-2 md:grid-cols-3 gap-4">
+                        {claim.facility_photos.map((url: string, i: number) => (
+                            <div key={i} className="aspect-square rounded-xl overflow-hidden bg-slate-100">
+                                <img src={url} alt="Facility" className="w-full h-full object-cover hover:scale-105 transition-transform duration-500" />
+                            </div>
+                        ))}
+                    </div>
+                </section>
+            )}
+
+            {/* 5. FAQ */}
+            {claim?.custom_faq?.length > 0 && (
+                <section className="bg-indigo-50 rounded-2xl border border-indigo-100 p-8">
+                    <h3 className="text-lg font-bold text-slate-900 mb-6 flex items-center gap-2"><MessageCircle className="h-5 w-5 text-indigo-600" /> Frequently Asked Questions</h3>
+                    <div className="space-y-4">
+                        {claim.custom_faq.map((item: any, i: number) => (
+                            <div key={i} className="bg-white p-5 rounded-xl border border-indigo-100 shadow-sm flex items-start gap-4">
+                                <div className="flex-shrink-0 w-6 h-6 bg-indigo-100 rounded-full flex items-center justify-center text-indigo-700 text-xs font-bold mt-0.5">
+                                    {i + 1}
+                                </div>
+                                <div>
+                                    <h4 className="font-bold text-slate-900 text-sm mb-2">{item.question}</h4>
+                                    <p className="text-sm text-slate-600 leading-relaxed">{item.answer}</p>
+                                </div>
+                            </div>
+                        ))}
+                    </div>
+                </section>
+            )}
+
+            {/* 6. BENEFITS */}
             <section className="bg-gradient-to-br from-indigo-50 to-white p-6 rounded-2xl border border-indigo-100 shadow-sm">
               <h2 className="text-lg font-bold text-slate-900 mb-4 flex items-center gap-2">
                 <HeartHandshake className="h-5 w-5 text-indigo-600" /> Why Consider This Study?
@@ -179,18 +270,16 @@ export default async function TrialDetail({ params }: Props) {
               </div>
             </section>
 
-            {/* DETAILS (Collapsible Logic - Handled by Client Component below) */}
+            {/* 7. DETAILS & INTERACTIVITY */}
             <TrialClientLogic trial={trial} />
 
           </div>
 
-          {/* --- RIGHT SIDEBAR: ACTION CENTER --- */}
+          {/* --- RIGHT SIDEBAR --- */}
           <div className="space-y-6">
             
-            {/* CLIENT-SIDE INTERACTIVITY (Quiz & Buttons) */}
             <TrialClientLogic trial={trial} sidebarMode={true} />
 
-            {/* STIPEND INFO */}
             <div className="bg-white rounded-2xl shadow-sm border border-slate-200 p-6">
               <h4 className="font-bold text-slate-900 mb-4 flex items-center gap-2">
                 <Wallet className="h-4 w-4 text-emerald-600" /> Stipend & Costs
@@ -213,7 +302,6 @@ export default async function TrialDetail({ params }: Props) {
               </div>
             </div>
 
-            {/* LOCATION */}
             <div className="bg-white rounded-2xl shadow-sm border border-slate-200 p-6">
               <h4 className="font-bold text-slate-900 mb-4 flex items-center gap-2"><MapPin className="h-4 w-4 text-indigo-600" /> Locations</h4>
               <div className="max-h-60 overflow-y-auto space-y-3">
