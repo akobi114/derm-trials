@@ -6,21 +6,24 @@ import { supabase } from '@/lib/supabase';
 import { 
   Loader2, LayoutDashboard, Settings, LogOut, CheckCircle2, 
   Plus, Search, MapPin, Users, Trash2, Edit3, CreditCard, 
-  ChevronRight, BarChart3, Building2
+  ChevronRight, BarChart3, Building2, AlertCircle, Clock, Check,
+  MessageSquare, FlaskConical, Layout, Phone, Calendar, Crown, Sparkles
 } from 'lucide-react';
 import Link from 'next/link';
 
 export default function ResearcherDashboard() {
   const router = useRouter();
   const [profile, setProfile] = useState<any>(null);
+  const [tier, setTier] = useState<'free' | 'pro'>('free'); // Default to free
   const [myTrials, setMyTrials] = useState<any[]>([]);
   const [loading, setLoading] = useState(true);
   
   // UI States
-  const [claimingMode, setClaimingMode] = useState(false);
+  const [claimingMode, setClaimingMode] = useState(false); 
   const [claimQuery, setClaimQuery] = useState("");
   const [searchResults, setSearchResults] = useState<any[]>([]);
   const [searchLoading, setSearchLoading] = useState(false);
+  const [isSubmitted, setIsSubmitted] = useState(false); 
 
   // Modal & Selection States
   const [isModalOpen, setIsModalOpen] = useState(false);
@@ -34,40 +37,61 @@ export default function ResearcherDashboard() {
       const { data: { user } } = await supabase.auth.getUser();
       if (!user) { router.push('/login'); return; }
 
-      // 1. Fetch Profile
-      const { data: profileData, error: profileError } = await supabase
+      // 1. Get Profile & Tier
+      const { data: profileData } = await supabase
         .from('researcher_profiles')
         .select('*')
         .eq('user_id', user.id)
         .single();
 
-      if (profileError) {
-        console.error("Profile Fetch Error:", profileError);
-      }
-
       if (profileData) {
         setProfile(profileData);
+        // READ TIER FROM DB (Default to free if null)
+        setTier(profileData.tier === 'pro' ? 'pro' : 'free');
         
-        // 2. Fetch Claims + Trial Data
         const { data: claims } = await supabase
           .from('claimed_trials')
-          .select(`
-            *, 
-            trials (
-              *,
-              leads (count)
-            )
-          `)
+          .select(`*, trials (*)`)
           .eq('researcher_id', profileData.id);
         
         if (claims) {
-            const formatted = claims.map((c: any) => ({
-                ...c.trials, 
-                claim_id: c.id, 
-                claim_status: c.status,
-                // IMPORTANT: Attach the specific site location from the claim
-                site_location: c.site_location,
-                lead_count: c.trials?.leads?.[0]?.count || 0
+            // Advanced Fetch: Get specific counts for the funnel
+            const formatted = await Promise.all(claims.map(async (c: any) => {
+                const { data: leads } = await supabase
+                    .from('leads')
+                    .select('id, site_status')
+                    .eq('trial_id', c.nct_id)
+                    .eq('site_city', c.site_location?.city) 
+                    .eq('site_state', c.site_location?.state);
+
+                const stats = {
+                    new: leads?.filter((l: any) => l.site_status === 'New').length || 0,
+                    screening: leads?.filter((l: any) => l.site_status === 'Contacted').length || 0,
+                    scheduled: leads?.filter((l: any) => l.site_status === 'Scheduled').length || 0,
+                    enrolled: leads?.filter((l: any) => l.site_status === 'Enrolled').length || 0,
+                    total: leads?.length || 0
+                };
+
+                let unreadCount = 0;
+                if (leads && leads.length > 0) {
+                    const leadIds = leads.map((l: any) => l.id);
+                    const { count: msgCount } = await supabase
+                        .from('messages')
+                        .select('*', { count: 'exact', head: true })
+                        .in('lead_id', leadIds)
+                        .eq('sender_role', 'patient')
+                        .eq('is_read', false);
+                    unreadCount = msgCount || 0;
+                }
+
+                return {
+                    ...c.trials, 
+                    claim_id: c.id, 
+                    claim_status: c.status,
+                    site_location: c.site_location,
+                    stats,
+                    unread_count: unreadCount
+                };
             }));
             setMyTrials(formatted);
         }
@@ -77,7 +101,10 @@ export default function ResearcherDashboard() {
     init();
   }, [router]);
 
-  const handleLogout = async () => { await supabase.auth.signOut(); router.push('/login'); };
+  const handleLogout = async () => { 
+      await supabase.auth.signOut(); 
+      router.push('/'); 
+  };
 
   const searchForTrial = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -87,23 +114,18 @@ export default function ResearcherDashboard() {
     setSearchLoading(false);
   };
 
-  // --- NEW: PROACTIVE CLAIMING LOGIC ---
   const initiateClaim = async (trial: any) => { 
       setSelectedTrial(trial);
       setSelectedSite(null);
-      setAvailableLocations([]); // Clear previous state
-      setIsModalOpen(true); // Open immediately while loading availability
+      setAvailableLocations([]);
+      setIsModalOpen(true);
 
-      // 1. Get all possible locations from the Trial Data
       const allLocations = trial.locations || [];
-
-      // 2. Fetch which locations are ALREADY claimed by ANY researcher
       const { data: existingClaims } = await supabase
         .from('claimed_trials')
         .select('site_location')
         .eq('nct_id', trial.nct_id);
 
-      // 3. Filter the list
       const claimedKeys = new Set(existingClaims?.map((c: any) => 
         `${c.site_location?.city}-${c.site_location?.state}`
       ) || []);
@@ -113,68 +135,173 @@ export default function ResearcherDashboard() {
       );
 
       setAvailableLocations(available);
-      
-      // Auto-select the first one if available to save a click
       if (available.length > 0) setSelectedSite(available[0]);
   };
   
   const confirmClaim = async () => {
-    if (!selectedTrial) return;
-    if (!profile || !profile.id) {
-        alert("Error: Profile not found.");
-        return;
-    }
-    // Validation: Must select a site if locations exist
+    if (!selectedTrial || !profile) return;
     if (availableLocations.length > 0 && !selectedSite) {
         alert("Please select which site location you are managing.");
         return;
     }
 
     setActionLoading(true);
-    
-    // Insert with the specific SITE LOCATION
+    const status = profile.is_verified ? 'approved' : 'pending_verification';
+
     const { data, error } = await supabase
         .from('claimed_trials')
         .insert({ 
             nct_id: selectedTrial.nct_id, 
             researcher_id: profile.id, 
-            status: 'approved',
-            site_location: selectedSite || {} // Save the JSON object
+            status: status,
+            site_location: selectedSite || {}
         })
         .select()
         .single();
 
     if (error) { 
-        console.error("Claim Error:", error);
-        if (error.code === '23505') {
-            alert("This specific location is already claimed.");
-        } else {
-            alert("Error claiming trial: " + error.message); 
-        }
+        if (error.code === '23505') alert("This location is already claimed.");
+        else alert("Error: " + error.message); 
     } else { 
-        // Success: Update UI
-        setClaimingMode(false); 
-        setMyTrials([...myTrials, { 
-            ...selectedTrial, 
-            claim_id: data.id, 
-            claim_status: 'approved', 
-            site_location: selectedSite, // Store for display
-            lead_count: 0 
-        }]); 
-        setIsModalOpen(false); 
+        window.location.reload();
     }
     setActionLoading(false);
   };
 
+  const removeClaim = async (claimId: string) => {
+    if(!confirm("Remove this study from your application?")) return;
+    const { error } = await supabase.from('claimed_trials').delete().eq('id', claimId);
+    if (!error) {
+        setMyTrials(myTrials.filter(t => t.claim_id !== claimId));
+    }
+  };
+
   if (loading) return <div className="min-h-screen flex items-center justify-center"><Loader2 className="h-8 w-8 animate-spin text-slate-400" /></div>;
 
+  // --- VIEW 1: UNVERIFIED ---
+  if (profile && !profile.is_verified) {
+      if (isSubmitted) {
+        return (
+            <div className="min-h-screen bg-slate-50 flex flex-col items-center justify-center p-6 font-sans">
+                <div className="max-w-md w-full bg-white p-8 rounded-2xl shadow-xl border border-slate-200 text-center animate-in zoom-in-95 duration-300">
+                    <div className="w-20 h-20 bg-emerald-100 text-emerald-600 rounded-full flex items-center justify-center mx-auto mb-6"><Check className="h-10 w-10" /></div>
+                    <h2 className="text-2xl font-bold text-slate-900 mb-2">Application Submitted</h2>
+                    <p className="text-slate-500 mb-8 leading-relaxed">We have received your request for <strong>{myTrials.length} studies</strong>. <br/>Our admin team is reviewing your credentials.</p>
+                    <div className="bg-slate-50 p-4 rounded-xl border border-slate-100 text-left">
+                        <h3 className="text-xs font-bold text-slate-400 uppercase mb-3">Queued for Review:</h3>
+                        <div className="space-y-2 max-h-40 overflow-y-auto">
+                            {myTrials.map(c => (
+                                <div key={c.claim_id} className="flex items-center gap-2 text-sm font-bold text-slate-700"><Clock className="h-4 w-4 text-amber-500 shrink-0" /><span className="truncate">{c.title}</span></div>
+                            ))}
+                        </div>
+                    </div>
+                    <button onClick={handleLogout} className="mt-8 text-sm text-slate-400 font-bold hover:text-slate-600">Sign Out</button>
+                </div>
+            </div>
+        );
+      }
+
+      return (
+        <div className="min-h-screen bg-slate-50 flex flex-col items-center justify-start pt-12 p-6 font-sans">
+            <div className="max-w-3xl w-full">
+                <div className="text-center mb-10">
+                    <div className="w-16 h-16 bg-indigo-100 text-indigo-600 rounded-2xl flex items-center justify-center mx-auto mb-6"><Building2 className="h-8 w-8" /></div>
+                    <h1 className="text-3xl font-bold text-slate-900 mb-3">Welcome, {profile?.first_name}</h1>
+                    <p className="text-slate-500 text-lg">Build your site profile. Add all the studies you are currently conducting.</p>
+                </div>
+
+                <div className="bg-white p-8 rounded-2xl shadow-xl border border-slate-200 mb-8">
+                    <h3 className="font-bold text-slate-900 mb-4">1. Search & Add Studies</h3>
+                    <div className="relative mb-6">
+                        <Search className="absolute left-4 top-4 h-5 w-5 text-slate-400" />
+                        <input type="text" placeholder="Enter NCT ID (e.g. NCT04345919) or Title..." className="w-full pl-12 p-4 bg-slate-50 border border-slate-200 rounded-xl outline-none focus:ring-2 focus:ring-indigo-500 font-bold text-slate-700" value={claimQuery} onChange={(e) => setClaimQuery(e.target.value)} />
+                        <button onClick={searchForTrial} disabled={searchLoading || !claimQuery} className="absolute right-3 top-2.5 bg-indigo-600 text-white px-4 py-1.5 rounded-lg font-bold text-sm hover:bg-indigo-700 disabled:opacity-50">{searchLoading ? "..." : "Search"}</button>
+                    </div>
+                    {searchResults.length > 0 && (
+                        <div className="space-y-3 mb-4 animate-in fade-in slide-in-from-top-2">
+                            {searchResults.map((trial) => (
+                                <div key={trial.nct_id} className="p-4 border border-slate-100 rounded-xl flex justify-between items-center hover:bg-slate-50 transition-colors">
+                                    <div>
+                                        <div className="font-mono text-[10px] text-slate-400 mb-1">{trial.nct_id}</div>
+                                        <h4 className="font-bold text-slate-900 text-sm">{trial.title}</h4>
+                                        <div className="text-xs text-slate-500 mt-1 flex items-center gap-1"><MapPin className="h-3 w-3" /> {trial.locations?.length || 0} Sites Available</div>
+                                    </div>
+                                    <button onClick={() => initiateClaim(trial)} className="bg-indigo-50 text-indigo-600 px-4 py-2 rounded-lg text-xs font-bold hover:bg-indigo-100">Select Site</button>
+                                </div>
+                            ))}
+                        </div>
+                    )}
+                </div>
+
+                <div className="bg-white p-8 rounded-2xl shadow-sm border border-slate-200 relative overflow-hidden">
+                    <div className="flex justify-between items-center mb-6">
+                        <h3 className="font-bold text-slate-900">2. Review Your List ({myTrials.length})</h3>
+                        {myTrials.length > 0 && <span className="text-xs font-bold text-emerald-600 bg-emerald-50 px-3 py-1 rounded-full flex items-center gap-1"><CheckCircle2 className="h-3 w-3" /> Ready to submit</span>}
+                    </div>
+                    {myTrials.length === 0 ? (
+                        <div className="text-center py-10 border-2 border-dashed border-slate-100 rounded-xl bg-slate-50/50 text-slate-400 italic text-sm">Your list is empty. Search above to add studies.</div>
+                    ) : (
+                        <div className="space-y-3 mb-8">
+                            {myTrials.map((t) => (
+                                <div key={t.claim_id} className="p-4 bg-slate-50 border border-slate-200 rounded-xl flex justify-between items-center group">
+                                    <div>
+                                        <h4 className="font-bold text-slate-900 text-sm truncate max-w-md">{t.title}</h4>
+                                        <div className="flex items-center gap-3 mt-1">
+                                            <span className="font-mono text-[10px] text-slate-400">{t.nct_id}</span>
+                                            <span className="text-[10px] font-bold text-indigo-600 flex items-center gap-1"><MapPin className="h-3 w-3" /> {t.site_location?.city}, {t.site_location?.state}</span>
+                                        </div>
+                                    </div>
+                                    <button onClick={() => removeClaim(t.claim_id)} className="p-2 text-slate-300 hover:text-red-500 hover:bg-red-50 rounded-lg transition-colors"><Trash2 className="h-4 w-4" /></button>
+                                </div>
+                            ))}
+                        </div>
+                    )}
+                    <div className="pt-6 border-t border-slate-100 flex justify-end">
+                        <button 
+                            onClick={() => setIsSubmitted(true)} 
+                            disabled={myTrials.length === 0}
+                            className="bg-slate-900 text-white px-8 py-4 rounded-xl font-bold text-lg shadow-xl hover:bg-slate-800 disabled:opacity-50 disabled:cursor-not-allowed transition-all transform hover:-translate-y-0.5 flex items-center gap-2"
+                        >
+                            Submit Application <ChevronRight className="h-5 w-5" />
+                        </button>
+                    </div>
+                </div>
+            </div>
+            {/* ONBOARDING MODAL */}
+            {isModalOpen && (
+                <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-900/50 backdrop-blur-sm animate-in fade-in duration-200">
+                    <div className="bg-white rounded-2xl p-6 w-full max-w-md shadow-2xl overflow-hidden">
+                        <h3 className="font-bold text-lg mb-2">Claim {selectedTrial?.nct_id}</h3>
+                        <p className="text-sm text-slate-500 mb-6">Select your site location.</p>
+                        <div className="mb-6 space-y-2 max-h-48 overflow-y-auto border border-slate-200 rounded-xl p-1 bg-slate-50/50">
+                            {availableLocations.map((loc: any, idx: number) => (
+                                <button key={idx} onClick={() => setSelectedSite(loc)} className={`w-full text-left p-3 rounded-lg text-sm flex items-center justify-between ${selectedSite === loc ? 'bg-white ring-1 ring-indigo-600 shadow-md' : 'hover:bg-white hover:shadow-sm'}`}>
+                                    <div><div className="font-bold text-slate-700">{loc.facility || loc.city}</div><div className="text-xs text-slate-500">{loc.city}, {loc.state}</div></div>
+                                    {selectedSite === loc && <CheckCircle2 className="h-5 w-5 text-indigo-600" />}
+                                </button>
+                            ))}
+                        </div>
+                        <div className="flex gap-3">
+                            <button onClick={() => setIsModalOpen(false)} className="flex-1 py-3 border border-slate-200 rounded-xl font-bold text-sm text-slate-600">Cancel</button>
+                            <button onClick={confirmClaim} disabled={actionLoading || !selectedSite} className="flex-1 py-3 bg-indigo-600 text-white rounded-xl font-bold text-sm hover:bg-indigo-700 shadow-lg disabled:opacity-50">{actionLoading ? "Processing..." : "Confirm & Claim"}</button>
+                        </div>
+                    </div>
+                </div>
+            )}
+        </div>
+      );
+  }
+
+  // --- VIEW 2: VERIFIED DASHBOARD (Main App) ---
   return (
     <div className="min-h-screen bg-slate-50 flex font-sans text-slate-900">
       
       {/* SIDEBAR */}
       <aside className="w-64 bg-white border-r border-slate-200 hidden md:flex flex-col fixed h-full z-10">
         <div className="p-6 h-20 flex items-center border-b border-slate-100">
-          <div className="font-bold text-xl tracking-tight">Derm<span className="text-indigo-600">Trials</span></div>
+          <Link href="/" className="font-bold text-xl tracking-tight cursor-pointer hover:opacity-80 transition-opacity">
+            Derm<span className="text-indigo-600">Trials</span>
+          </Link>
         </div>
         <nav className="flex-1 p-4 space-y-1">
           <Link href="/dashboard/researcher" className="flex items-center gap-3 px-4 py-3 rounded-lg font-medium text-sm bg-indigo-50 text-indigo-700">
@@ -183,10 +310,36 @@ export default function ResearcherDashboard() {
           <Link href="/dashboard/researcher/billing" className="flex items-center gap-3 px-4 py-3 rounded-lg font-medium text-sm text-slate-600 hover:bg-slate-50 transition-colors">
             <CreditCard className="h-5 w-5" /> Billing & Invoices
           </Link>
-          <button className="w-full flex items-center gap-3 px-4 py-3 text-slate-400 rounded-lg font-medium text-sm cursor-not-allowed">
-            <Settings className="h-5 w-5" /> Settings (Coming Soon)
-          </button>
+          <Link href="/dashboard/researcher/settings" className="flex items-center gap-3 px-4 py-3 rounded-lg font-medium text-sm text-slate-600 hover:bg-slate-50 transition-colors">
+            <Settings className="h-5 w-5" /> Settings
+          </Link>
         </nav>
+
+        {/* --- PLAN WIDGET --- */}
+        <div className="px-4 mb-2">
+            <div className={`p-4 rounded-xl border ${tier === 'pro' ? 'bg-gradient-to-br from-indigo-900 to-indigo-800 text-white border-indigo-700 shadow-lg' : 'bg-white border-slate-200 shadow-sm'}`}>
+                <div className="flex items-center justify-between mb-3">
+                    <span className={`text-[10px] font-bold uppercase tracking-wider ${tier === 'pro' ? 'text-indigo-200' : 'text-slate-400'}`}>Current Plan</span>
+                    {tier === 'pro' && <Crown className="h-4 w-4 text-yellow-400 fill-yellow-400" />}
+                </div>
+                <div className="flex items-center gap-2 mb-4">
+                    <div className={`text-lg font-extrabold ${tier === 'pro' ? 'text-white' : 'text-slate-900'}`}>
+                        {tier === 'pro' ? 'Pro Plan' : 'Free Plan'}
+                    </div>
+                    {tier === 'pro' && <span className="bg-yellow-400 text-yellow-900 text-[9px] font-bold px-1.5 py-0.5 rounded">PRO</span>}
+                </div>
+                {tier === 'free' ? (
+                    <Link href="/dashboard/researcher/billing" className="block w-full py-2 bg-indigo-600 hover:bg-indigo-700 text-white text-xs font-bold rounded-lg text-center transition-colors">
+                        Upgrade Now
+                    </Link>
+                ) : (
+                    <div className="flex items-center gap-1.5 text-[10px] font-medium text-indigo-200">
+                        <Sparkles className="h-3 w-3" /> All Features Active
+                    </div>
+                )}
+            </div>
+        </div>
+
         <div className="p-4 border-t border-slate-100">
           <button onClick={handleLogout} className="flex items-center gap-3 px-4 py-3 text-slate-500 hover:text-red-600 hover:bg-red-50 rounded-lg font-medium text-sm w-full transition-colors">
             <LogOut className="h-5 w-5" /> Sign Out
@@ -208,124 +361,155 @@ export default function ResearcherDashboard() {
            )}
         </header>
 
-        {/* CLAIM SEARCH UI */}
+        {/* CLAIM SEARCH UI (FOR VERIFIED USERS) */}
         {claimingMode ? (
             <div className="max-w-2xl mx-auto mt-10 animate-in fade-in slide-in-from-bottom-4">
-                <div className="relative mb-8">
-                    <Search className="absolute left-4 top-4 h-5 w-5 text-slate-400" />
-                    <input type="text" placeholder="Search by NCT ID or Title..." className="w-full pl-12 p-4 bg-white border border-slate-200 rounded-xl shadow-sm outline-none focus:ring-2 focus:ring-indigo-500 transition-all" value={claimQuery} onChange={(e) => setClaimQuery(e.target.value)} autoFocus />
-                    <button onClick={searchForTrial} disabled={searchLoading} className="absolute right-3 top-2.5 bg-indigo-600 text-white px-4 py-1.5 rounded-lg font-bold text-sm hover:bg-indigo-700 disabled:opacity-50">{searchLoading ? "Searching..." : "Search"}</button>
-                </div>
-                <div className="space-y-3">
-                    {searchResults.map((trial) => (
-                        <div key={trial.nct_id} className="bg-white p-5 rounded-xl border border-slate-200 flex justify-between items-center hover:border-indigo-200 transition-colors">
-                            <div>
-                                <div className="font-mono text-[10px] text-slate-400 mb-1">{trial.nct_id}</div>
-                                <h4 className="font-bold text-slate-900 text-sm">{trial.title}</h4>
-                                <div className="text-xs text-slate-500 mt-1 flex items-center gap-1"><MapPin className="h-3 w-3" /> {trial.locations?.length || 0} Sites Available</div>
+                <div className="bg-white p-8 rounded-2xl shadow-xl border border-slate-200">
+                    <h3 className="font-bold text-slate-900 mb-4 text-lg">Add Another Study</h3>
+                    <div className="relative mb-8">
+                        <Search className="absolute left-4 top-4 h-5 w-5 text-slate-400" />
+                        <input type="text" placeholder="Search by NCT ID or Title..." className="w-full pl-12 p-4 bg-slate-50 border border-slate-200 rounded-xl outline-none focus:ring-2 focus:ring-indigo-500 font-bold text-slate-700" value={claimQuery} onChange={(e) => setClaimQuery(e.target.value)} autoFocus />
+                        <button onClick={searchForTrial} disabled={searchLoading} className="absolute right-3 top-2.5 bg-indigo-600 text-white px-4 py-1.5 rounded-lg font-bold text-sm hover:bg-indigo-700 disabled:opacity-50">{searchLoading ? "..." : "Search"}</button>
+                    </div>
+                    <div className="space-y-3">
+                        {searchResults.map((trial) => (
+                            <div key={trial.nct_id} className="bg-white p-5 rounded-xl border border-slate-200 flex justify-between items-center hover:border-indigo-200 transition-colors">
+                                <div>
+                                    <div className="font-mono text-[10px] text-slate-400 mb-1">{trial.nct_id}</div>
+                                    <h4 className="font-bold text-slate-900 text-sm">{trial.title}</h4>
+                                    <div className="text-xs text-slate-500 mt-1 flex items-center gap-1"><MapPin className="h-3 w-3" /> {trial.locations?.length || 0} Sites Available</div>
+                                </div>
+                                <button onClick={() => initiateClaim(trial)} className="px-4 py-2 bg-slate-50 text-slate-700 hover:bg-indigo-50 hover:text-indigo-700 font-bold text-xs rounded-lg transition-colors">Select Site</button>
                             </div>
-                            <button onClick={() => initiateClaim(trial)} className="px-4 py-2 bg-slate-50 text-slate-700 hover:bg-indigo-50 hover:text-indigo-700 font-bold text-xs rounded-lg transition-colors">Select Site</button>
-                        </div>
-                    ))}
+                        ))}
+                        {searchResults.length === 0 && claimQuery && !searchLoading && <div className="text-center text-slate-400 italic">No trials found.</div>}
+                    </div>
+                    <button onClick={() => setClaimingMode(false)} className="mt-8 text-slate-400 text-sm hover:text-slate-600 font-medium block mx-auto">Cancel</button>
                 </div>
-                <button onClick={() => setClaimingMode(false)} className="mt-8 text-slate-400 text-sm hover:text-slate-600 font-medium block mx-auto">Cancel</button>
             </div>
         ) : (
-            /* CARDS GRID */
-            <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-6">
+            /* --- UPDATED: FULL-WIDTH HERO CARDS (NO SIDE BAR) --- */
+            <div className="space-y-6">
                 {myTrials.length > 0 ? myTrials.map((trial) => (
-                    <div key={trial.claim_id} className="bg-white rounded-xl border border-slate-200 shadow-sm hover:shadow-md transition-all flex flex-col h-full overflow-hidden group">
-                        <div className="p-6 flex-1">
-                            <div className="flex justify-between items-start mb-4">
-                                <span className="font-mono text-[10px] text-slate-400 bg-slate-50 px-2 py-1 rounded">{trial.nct_id}</span>
-                                <div className="flex items-center gap-1 text-[10px] font-bold text-emerald-600 bg-emerald-50 px-2 py-1 rounded-full"><div className="w-1.5 h-1.5 bg-emerald-500 rounded-full animate-pulse"></div> Active</div>
-                            </div>
-                            <h3 className="font-bold text-slate-900 mb-2 line-clamp-2 min-h-[3rem]">{trial.title}</h3>
+                    <div key={trial.claim_id} className="group bg-white rounded-2xl border border-slate-200 shadow-sm hover:shadow-xl transition-all duration-300 overflow-hidden relative">
+                        <div className="flex flex-col md:flex-row">
                             
-                            {/* DISPLAY SPECIFIC SITE */}
-                            <div className="flex items-center gap-2 text-xs text-slate-600 mb-6 bg-slate-50 p-2 rounded-lg border border-slate-100">
-                                <MapPin className="h-3.5 w-3.5 text-indigo-600" /> 
-                                <span className="truncate font-medium">
-                                    {trial.site_location?.city ? `${trial.site_location.city}, ${trial.site_location.state}` : "Remote / Main Site"}
-                                </span>
-                            </div>
-                            
-                            <div className="flex gap-4 py-4 border-t border-slate-50">
-                                <div><div className="text-2xl font-bold text-slate-900">{trial.lead_count}</div><div className="text-[10px] uppercase font-bold text-slate-400">Candidates</div></div>
-                                <div><div className="text-2xl font-bold text-slate-900">0</div><div className="text-[10px] uppercase font-bold text-slate-400">Screened</div></div>
-                            </div>
-                        </div>
+                            {/* LEFT: MAIN INFO */}
+                            <div className="flex-1 p-8 pl-10 flex flex-col justify-between">
+                                <div>
+                                    <div className="flex items-center gap-3 mb-3">
+                                        <span className="text-[10px] font-bold bg-slate-100 text-slate-500 px-2 py-1 rounded border border-slate-200">{trial.nct_id}</span>
+                                        {/* UNREAD MESSAGES BADGE */}
+                                        {trial.unread_count > 0 && (
+                                            <span className="text-[10px] font-bold bg-red-50 text-red-600 px-2 py-1 rounded border border-red-100 flex items-center gap-1 animate-in zoom-in">
+                                                <div className="w-1.5 h-1.5 bg-red-500 rounded-full animate-bounce"></div> {trial.unread_count} Unread Messages
+                                            </span>
+                                        )}
+                                        {/* PENDING STATUS BADGE */}
+                                        {trial.claim_status !== 'approved' && (
+                                            <span className="text-[10px] font-bold bg-amber-50 text-amber-600 px-2 py-1 rounded border border-amber-100 flex items-center gap-1">
+                                                <AlertCircle className="h-3 w-3" /> Verification Pending
+                                            </span>
+                                        )}
+                                    </div>
+                                    <h3 className="text-2xl font-bold text-slate-900 mb-2 leading-tight group-hover:text-indigo-600 transition-colors">
+                                        <Link href={`/dashboard/researcher/study/${trial.nct_id}?tab=leads`} className="hover:underline decoration-2 underline-offset-2">
+                                            {trial.title}
+                                        </Link>
+                                    </h3>
+                                    <div className="flex items-center gap-4 text-xs font-medium text-slate-500">
+                                        <span className="flex items-center gap-1"><MapPin className="h-3 w-3" /> {trial.site_location?.city || 'Remote'}, {trial.site_location?.state || 'USA'}</span>
+                                        <span className="w-1 h-1 bg-slate-300 rounded-full"></span>
+                                        <span className="flex items-center gap-1"><FlaskConical className="h-3 w-3" /> {trial.phase || 'N/A'}</span>
+                                    </div>
+                                </div>
 
-                        <div className="bg-slate-50 border-t border-slate-100 p-2 flex gap-2">
-                            <Link href={`/dashboard/researcher/study/${trial.nct_id}?tab=profile`} className="flex-1 py-2.5 flex items-center justify-center gap-2 text-xs font-bold text-slate-600 hover:bg-white hover:text-indigo-600 hover:shadow-sm rounded-lg transition-all border border-transparent hover:border-slate-200">
-                                <Edit3 className="h-3.5 w-3.5" /> Edit Page
-                            </Link>
-                            <Link href={`/dashboard/researcher/study/${trial.nct_id}?tab=leads`} className="flex-1 py-2.5 flex items-center justify-center gap-2 text-xs font-bold text-white bg-indigo-600 hover:bg-indigo-700 rounded-lg shadow-sm transition-all">
-                                <Users className="h-3.5 w-3.5" /> Candidates
-                            </Link>
+                                <div className="mt-8 flex gap-3">
+                                    <Link 
+                                        href={`/dashboard/researcher/study/${trial.nct_id}?tab=profile`}
+                                        className="p-2.5 text-slate-400 hover:text-indigo-600 hover:bg-indigo-50 rounded-lg transition-all border border-slate-200 hover:border-indigo-200"
+                                        title="Edit Page"
+                                    >
+                                        <Edit3 className="h-4 w-4" />
+                                    </Link>
+                                    <Link 
+                                        href={`/dashboard/researcher/study/${trial.nct_id}?tab=analytics`}
+                                        className="p-2.5 text-slate-400 hover:text-indigo-600 hover:bg-indigo-50 rounded-lg transition-all border border-slate-200 hover:border-indigo-200"
+                                        title="Analytics"
+                                    >
+                                        <BarChart3 className="h-4 w-4" />
+                                    </Link>
+                                    <Link 
+                                        href={`/dashboard/researcher/study/${trial.nct_id}?tab=leads`}
+                                        className="flex items-center gap-2 bg-indigo-600 text-white px-5 py-2.5 rounded-lg text-xs font-bold hover:bg-indigo-700 transition-all shadow-sm shadow-indigo-200"
+                                    >
+                                        Manage Study <ChevronRight className="h-3 w-3" />
+                                    </Link>
+                                </div>
+                            </div>
+
+                            {/* RIGHT: PIPELINE MINI-VIEW */}
+                            <div className="w-full md:w-96 bg-slate-50/50 border-t md:border-t-0 md:border-l border-slate-100 p-6 flex flex-col justify-center">
+                                <div className="grid grid-cols-2 gap-4">
+                                    {/* NEW */}
+                                    <div className="bg-white p-3 rounded-xl border border-slate-200 shadow-sm">
+                                        <div className="text-[10px] font-bold text-blue-500 uppercase tracking-wider mb-1 flex items-center gap-1.5"><Users className="h-3 w-3" /> New</div>
+                                        <div className="text-xl font-extrabold text-slate-900">{trial.stats?.new || 0}</div>
+                                    </div>
+                                    
+                                    {/* SCREENING */}
+                                    <div className="bg-white p-3 rounded-xl border border-slate-200 shadow-sm">
+                                        <div className="text-[10px] font-bold text-amber-500 uppercase tracking-wider mb-1 flex items-center gap-1.5"><Phone className="h-3 w-3" /> Screening</div>
+                                        <div className="text-xl font-extrabold text-slate-900">{trial.stats?.screening || 0}</div>
+                                    </div>
+
+                                    {/* SCHEDULED */}
+                                    <div className="bg-white p-3 rounded-xl border border-slate-200 shadow-sm">
+                                        <div className="text-[10px] font-bold text-purple-500 uppercase tracking-wider mb-1 flex items-center gap-1.5"><Calendar className="h-3 w-3" /> Scheduled</div>
+                                        <div className="text-xl font-extrabold text-slate-900">{trial.stats?.scheduled || 0}</div>
+                                    </div>
+
+                                    {/* ENROLLED */}
+                                    <div className="bg-white p-3 rounded-xl border border-slate-200 shadow-sm">
+                                        <div className="text-[10px] font-bold text-emerald-600 uppercase tracking-wider mb-1 flex items-center gap-1.5"><CheckCircle2 className="h-3 w-3" /> Enrolled</div>
+                                        <div className="text-xl font-extrabold text-slate-900">{trial.stats?.enrolled || 0}</div>
+                                    </div>
+                                </div>
+                            </div>
                         </div>
                     </div>
                 )) : (
-                    <div className="col-span-full py-20 text-center border-2 border-dashed border-slate-200 rounded-xl bg-slate-50/50">
-                        <div className="w-12 h-12 bg-white rounded-full flex items-center justify-center mx-auto mb-3 shadow-sm text-slate-300"><LayoutDashboard className="h-6 w-6" /></div>
-                        <h3 className="font-bold text-slate-900">No studies yet</h3>
-                        <p className="text-slate-500 text-sm mb-6">If your trials disappeared, please refresh. Otherwise claim your first trial.</p>
-                        <button onClick={() => setClaimingMode(true)} className="px-6 py-2.5 bg-indigo-600 text-white rounded-lg font-bold text-sm shadow hover:bg-indigo-700">Find Study</button>
+                    <div className="text-center py-20 bg-white rounded-3xl border border-slate-200 shadow-sm">
+                        <div className="w-20 h-20 bg-indigo-50 rounded-full flex items-center justify-center mx-auto mb-6 text-indigo-500">
+                            <Search className="h-10 w-10" />
+                        </div>
+                        <h3 className="text-xl font-bold text-slate-900 mb-2">No active studies</h3>
+                        <p className="text-slate-500 max-w-md mx-auto mb-8">Search our database of 400,000+ clinical trials and claim yours to start recruiting active candidates today.</p>
+                        <button onClick={() => setClaimingMode(true)} className="px-8 py-3 bg-slate-900 text-white rounded-xl font-bold hover:bg-slate-800 transition-colors">
+                            Find Your Study
+                        </button>
                     </div>
                 )}
             </div>
         )}
 
-        {/* MODAL: SITE SELECTION */}
+        {/* REUSED MODAL FOR VERIFIED USERS */}
         {isModalOpen && (
             <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-900/50 backdrop-blur-sm animate-in fade-in duration-200">
                 <div className="bg-white rounded-2xl p-6 w-full max-w-md shadow-2xl overflow-hidden">
                     <h3 className="font-bold text-lg mb-2">Claim {selectedTrial?.nct_id}</h3>
-                    <p className="text-sm text-slate-500 mb-6">Select the site location you manage. Locations already claimed by other researchers are hidden.</p>
-                    
-                    {/* SITE SELECTOR DROPDOWN */}
-                    <div className="mb-6">
-                        <label className="text-xs font-bold text-slate-900 uppercase mb-2 block">Available Locations</label>
-                        {availableLocations.length > 0 ? (
-                            <div className="space-y-2 max-h-48 overflow-y-auto border border-slate-200 rounded-xl p-1 bg-slate-50/50">
-                                {availableLocations.map((loc: any, idx: number) => {
-                                    const isSelected = selectedSite === loc;
-                                    return (
-                                        <button 
-                                            key={idx} 
-                                            onClick={() => setSelectedSite(loc)}
-                                            className={`w-full text-left p-3 rounded-lg text-sm flex items-center justify-between transition-all duration-200 ${isSelected ? 'bg-white border-indigo-600 ring-1 ring-indigo-600 shadow-md transform scale-[1.02]' : 'bg-white border-transparent hover:bg-white hover:border-slate-300 hover:shadow-sm'}`}
-                                        >
-                                            <div className="flex items-center gap-3">
-                                                <div className={`p-2 rounded-full ${isSelected ? 'bg-indigo-50 text-indigo-600' : 'bg-slate-100 text-slate-400'}`}>
-                                                    <Building2 className="h-4 w-4" />
-                                                </div>
-                                                <div>
-                                                    <div className={`font-bold ${isSelected ? 'text-indigo-900' : 'text-slate-700'}`}>{loc.facility || loc.city}</div>
-                                                    <div className="text-xs font-normal text-slate-500">{loc.city}, {loc.state}</div>
-                                                </div>
-                                            </div>
-                                            {isSelected && <CheckCircle2 className="h-5 w-5 text-indigo-600" />}
-                                        </button>
-                                    );
-                                })}
-                            </div>
-                        ) : (
-                            <div className="p-6 bg-slate-50 rounded-lg border border-slate-200 border-dashed text-sm text-slate-500 italic text-center">
-                                No available locations found. <br/>All sites for this trial may already be claimed.
-                            </div>
-                        )}
+                    <p className="text-sm text-slate-500 mb-6">Select your site location.</p>
+                    <div className="mb-6 space-y-2 max-h-48 overflow-y-auto border border-slate-200 rounded-xl p-1 bg-slate-50/50">
+                        {availableLocations.map((loc: any, idx: number) => (
+                            <button key={idx} onClick={() => setSelectedSite(loc)} className={`w-full text-left p-3 rounded-lg text-sm flex items-center justify-between ${selectedSite === loc ? 'bg-white ring-1 ring-indigo-600 shadow-md' : 'hover:bg-white hover:shadow-sm'}`}>
+                                <div><div className="font-bold text-slate-700">{loc.facility || loc.city}</div><div className="text-xs text-slate-500">{loc.city}, {loc.state}</div></div>
+                                {selectedSite === loc && <CheckCircle2 className="h-5 w-5 text-indigo-600" />}
+                            </button>
+                        ))}
                     </div>
-
-                    <div className="flex gap-3 pt-2 border-t border-slate-100">
-                        <button onClick={() => setIsModalOpen(false)} className="flex-1 py-3 border border-slate-200 rounded-xl font-bold text-sm text-slate-600 hover:bg-slate-50 hover:text-slate-900 transition-colors">Cancel</button>
-                        <button 
-                            onClick={confirmClaim} 
-                            disabled={actionLoading || availableLocations.length === 0} 
-                            className="flex-1 py-3 bg-indigo-600 text-white rounded-xl font-bold text-sm hover:bg-indigo-700 shadow-lg disabled:opacity-50 disabled:cursor-not-allowed transition-all"
-                        >
-                            {actionLoading ? "Processing..." : "Confirm & Claim"}
-                        </button>
+                    <div className="flex gap-3">
+                        <button onClick={() => setIsModalOpen(false)} className="flex-1 py-3 border border-slate-200 rounded-xl font-bold text-sm text-slate-600">Cancel</button>
+                        <button onClick={confirmClaim} disabled={actionLoading || !selectedSite} className="flex-1 py-3 bg-indigo-600 text-white rounded-xl font-bold text-sm hover:bg-indigo-700 shadow-lg disabled:opacity-50">{actionLoading ? "Processing..." : "Confirm & Claim"}</button>
                     </div>
                 </div>
             </div>

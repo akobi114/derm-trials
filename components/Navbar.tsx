@@ -4,7 +4,7 @@ import Link from "next/link";
 import { usePathname, useRouter } from 'next/navigation';
 import { Search, Lock, Menu, X, LogOut, LayoutDashboard } from "lucide-react";
 import { useState, useEffect } from "react";
-import { supabase } from "@/lib/supabase";
+import { supabase } from '@/lib/supabase';
 
 export default function Navbar() {
   const pathname = usePathname();
@@ -72,7 +72,8 @@ export default function Navbar() {
               </>
             ) : (
               <>
-                <Link href="/dashboard/researcher" className="text-sm font-bold text-indigo-600 flex items-center gap-2 bg-indigo-50 px-3 py-1.5 rounded-lg hover:bg-indigo-100 transition-colors">
+                {/* UPDATED: Points to Traffic Cop Page */}
+                <Link href="/dashboard" className="text-sm font-bold text-indigo-600 flex items-center gap-2 bg-indigo-50 px-3 py-1.5 rounded-lg hover:bg-indigo-100 transition-colors">
                   <LayoutDashboard className="h-4 w-4" /> Dashboard
                 </Link>
                 <button 
@@ -116,7 +117,8 @@ export default function Navbar() {
             </>
           ) : (
             <>
-              <Link href="/dashboard/researcher" className="block text-sm font-bold text-indigo-600 py-2">Dashboard</Link>
+              {/* UPDATED: Points to Traffic Cop Page */}
+              <Link href="/dashboard" className="block text-sm font-bold text-indigo-600 py-2">Dashboard</Link>
               <button onClick={handleLogout} className="block w-full text-left text-sm font-bold text-red-600 py-2">Sign Out</button>
             </>
           )}

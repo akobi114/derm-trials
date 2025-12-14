@@ -2,7 +2,7 @@
 
 import { useState, useEffect } from "react";
 import Link from "next/link"; 
-import { useRouter } from "next/navigation"; // Import useRouter
+import { useRouter } from "next/navigation"; 
 import Navbar from "@/components/Navbar";
 import { supabase } from "@/lib/supabase"; 
 import { 
@@ -10,18 +10,17 @@ import {
   Bot, Sparkles, Play, AlertCircle, History, ExternalLink,
   ArrowLeft, ChevronDown, ChevronUp, Clock, Check, Undo,
   FileText, ListChecks, BookOpen, ShieldAlert, Building2, User, X,
-  ShieldCheck 
+  ShieldCheck, MapPin, FlaskConical, ChevronRight, Mail, Phone, Trash2, Eye
 } from "lucide-react";
 
-// --- HELPERS ---
 const wait = (ms: number) => new Promise(resolve => setTimeout(resolve, ms));
 
 // 🔒 SECURITY: Replace this with the exact email you use to log in!
 const ADMIN_EMAIL = "akobic14@gmail.com"; 
 
 export default function SystemOps() {
-  const router = useRouter(); // Initialize router
-  const [activeTab, setActiveTab] = useState<'trials' | 'researchers'>('trials');
+  const router = useRouter();
+  const [activeTab, setActiveTab] = useState<'trials' | 'researchers' | 'verified'>('trials');
   
   // Trial State
   const [syncLoading, setSyncLoading] = useState(false);
@@ -36,6 +35,11 @@ export default function SystemOps() {
   
   // Researcher State
   const [researcherList, setResearcherList] = useState<any[]>([]);
+  const [verifiedList, setVerifiedList] = useState<any[]>([]);
+  const [expandedResearcherId, setExpandedResearcherId] = useState<string | null>(null);
+
+  // Document Viewer State (Modal)
+  const [viewDocUrl, setViewDocUrl] = useState<string | null>(null);
 
   const [lastSyncTime, setLastSyncTime] = useState<string | null>(null);
   const [lastAiTime, setLastAiTime] = useState<string | null>(null);
@@ -44,23 +48,14 @@ export default function SystemOps() {
   useEffect(() => {
     async function checkUserAndLoad() {
       const { data: { user } } = await supabase.auth.getUser();
-      
-      // 1. Not logged in? -> Login Page
-      if (!user) {
-        router.push('/login');
-        return;
-      }
-
-      // 2. Logged in, but NOT the Admin? -> Kick to Home
+      if (!user) { router.push('/login'); return; }
       if (user.email !== ADMIN_EMAIL) {
         console.warn("Unauthorized access attempt to System Ops by:", user.email);
-        router.push('/'); 
-        return;
+        router.push('/'); return;
       }
-
-      // 3. Allowed -> Run Fetches
       fetchLists();
       fetchResearcherQueue();
+      fetchVerifiedResearchers();
       fetchSystemStats();
     }
     checkUserAndLoad();
@@ -90,20 +85,97 @@ export default function SystemOps() {
     if (reviewed) setReviewedList(reviewed);
   };
 
+  // --- RESEARCHER FETCHING ---
+
   const fetchResearcherQueue = async () => {
-    const { data } = await supabase.from('researcher_profiles').select('*').eq('is_verified', false).order('created_at', { ascending: false });
+    const { data } = await supabase
+        .from('researcher_profiles')
+        .select(`
+            *,
+            claimed_trials (
+                id, nct_id, status, site_location,
+                trials (title)
+            )
+        `)
+        .eq('is_verified', false)
+        .order('created_at', { ascending: false });
+
     if (data) setResearcherList(data);
+  };
+
+  const fetchVerifiedResearchers = async () => {
+    const { data } = await supabase
+        .from('researcher_profiles')
+        .select(`
+            *,
+            claimed_trials (
+                id, nct_id, status, site_location,
+                trials (title)
+            )
+        `)
+        .eq('is_verified', true)
+        .order('company_name', { ascending: true });
+
+    if (data) setVerifiedList(data);
+  };
+
+  // --- ACTIONS ---
+
+  // 1. VIEW DOCUMENT (MODAL ONLY)
+  const viewDocument = async (path: string) => {
+    if (!path) return;
+    
+    // Generate secure link
+    const { data, error } = await supabase.storage
+        .from('verifications')
+        .createSignedUrl(path, 600); // 10 mins
+
+    if (error) {
+        alert("Error loading document: " + error.message);
+        return;
+    }
+    
+    // Set URL to state (Triggers Modal)
+    setViewDocUrl(data.signedUrl);
+  };
+
+  // 2. CLOSE MODAL
+  const closeDocument = () => {
+    setViewDocUrl(null);
   };
 
   const verifyResearcher = async (id: string) => {
     const { error } = await supabase.from('researcher_profiles').update({ is_verified: true }).eq('id', id);
-    if (!error) { alert("Researcher Verified!"); fetchResearcherQueue(); }
+    if (!error) {
+        await supabase.from('claimed_trials').update({ status: 'approved' }).eq('researcher_id', id);
+        alert("Researcher Verified & Trials Approved!"); 
+        fetchResearcherQueue(); 
+        fetchVerifiedResearchers(); 
+    }
   };
 
   const rejectResearcher = async (id: string) => {
     if(!confirm("Are you sure? This deletes the profile.")) return;
     const { error } = await supabase.from('researcher_profiles').delete().eq('id', id);
     if(!error) fetchResearcherQueue();
+  };
+
+  const unlinkTrial = async (claimId: string, researcherId: string) => {
+    if(!confirm("Are you sure you want to remove this trial from the researcher's account?")) return;
+    const { error } = await supabase.from('claimed_trials').delete().eq('id', claimId);
+    if (!error) {
+        setVerifiedList(prev => prev.map(r => {
+            if (r.id === researcherId) {
+                return {
+                    ...r,
+                    claimed_trials: r.claimed_trials.filter((t: any) => t.id !== claimId)
+                };
+            }
+            return r;
+        }));
+    } else {
+        alert("Error deleting trial linkage: " + error.message);
+    }
   };
 
   const toggleReviewStatus = async (nctId: string, newStatus: boolean) => {
@@ -184,7 +256,6 @@ export default function SystemOps() {
 
   const TrialRow = ({ item, isReviewed }: { item: any, isReviewed: boolean }) => {
     const isExpanded = expandedId === item.nct_id;
-    const [tab, setTab] = useState<'brief' | 'detailed'>('brief');
     return (
         <div className={`group transition-all border-b border-slate-100 ${isReviewed ? 'bg-slate-50/50' : 'hover:bg-indigo-50/30'}`}>
           <div className="p-4 flex items-center justify-between">
@@ -248,7 +319,7 @@ export default function SystemOps() {
   };
 
   return (
-    <div className="min-h-screen bg-slate-50 pb-20">
+    <div className="min-h-screen bg-slate-50 pb-20 relative">
       <Navbar />
       <main className="max-w-7xl mx-auto px-6 py-10">
         
@@ -271,11 +342,15 @@ export default function SystemOps() {
             <button onClick={() => setActiveTab('researchers')} className={`pb-4 px-2 text-sm font-bold border-b-2 transition-colors ${activeTab === 'researchers' ? 'border-indigo-600 text-indigo-600' : 'border-transparent text-slate-500 hover:text-slate-700'}`}>
                 Researcher Approvals {researcherList.length > 0 && <span className="ml-2 bg-red-500 text-white text-[10px] px-1.5 py-0.5 rounded-full">{researcherList.length}</span>}
             </button>
+            <button onClick={() => setActiveTab('verified')} className={`pb-4 px-2 text-sm font-bold border-b-2 transition-colors ${activeTab === 'verified' ? 'border-indigo-600 text-indigo-600' : 'border-transparent text-slate-500 hover:text-slate-700'}`}>
+                Active Sites ({verifiedList.length})
+            </button>
         </div>
 
         {/* TAB 1: TRIALS */}
         {activeTab === 'trials' && (
             <>
+                {/* ... TRIALS COMPONENT ... */}
                 <div className="grid grid-cols-1 lg:grid-cols-2 gap-8 mb-12">
                     <div className="flex flex-col rounded-2xl bg-white p-8 shadow-sm border border-slate-200">
                         <div className="flex items-center justify-between mb-6">
@@ -325,7 +400,7 @@ export default function SystemOps() {
             </>
         )}
 
-        {/* --- TAB 2: RESEARCHERS --- */}
+        {/* --- TAB 2: RESEARCHERS (EXPANDABLE) --- */}
         {activeTab === 'researchers' && (
             <div className="max-w-4xl">
                 <div className="rounded-2xl bg-white shadow-sm border border-slate-200 overflow-hidden">
@@ -340,24 +415,202 @@ export default function SystemOps() {
                                 <p>No new researcher applications.</p>
                             </div>
                         ) : (
-                            researcherList.map((r) => (
-                                <div key={r.id} className="p-6 hover:bg-slate-50 transition-colors">
-                                    <div className="flex flex-col md:flex-row md:items-center justify-between gap-6">
-                                        <div className="flex-1">
-                                            <div className="flex items-center gap-3 mb-2"><h4 className="font-bold text-slate-900 text-lg">{r.company_name || "Unknown Company"}</h4><span className="bg-amber-100 text-amber-800 text-[10px] font-bold px-2 py-0.5 rounded uppercase tracking-wide">Pending</span></div>
-                                            <div className="grid grid-cols-1 md:grid-cols-2 gap-4 text-sm text-slate-600">
-                                                <div className="flex items-center gap-2"><User className="h-4 w-4 text-slate-400" /> {r.full_name} ({r.role})</div>
-                                                <div className="flex items-center gap-2 font-mono bg-slate-100 px-2 py-1 rounded w-fit"><ShieldAlert className="h-3 w-3 text-slate-400" /> NPI: {r.npi_number || "N/A"}</div>
+                            researcherList.map((r) => {
+                                const isExpanded = expandedResearcherId === r.id;
+                                return (
+                                    <div key={r.id} className={`group transition-all ${isExpanded ? 'bg-slate-50' : 'hover:bg-slate-50'}`}>
+                                        <div 
+                                            className="p-6 flex items-center justify-between cursor-pointer"
+                                            onClick={() => setExpandedResearcherId(isExpanded ? null : r.id)}
+                                        >
+                                            <div className="flex items-center gap-4">
+                                                <div className={`p-1.5 rounded-lg transition-colors ${isExpanded ? 'bg-indigo-100 text-indigo-600' : 'bg-slate-100 text-slate-400'}`}>
+                                                    {isExpanded ? <ChevronUp className="h-4 w-4" /> : <ChevronDown className="h-4 w-4" />}
+                                                </div>
+                                                <div>
+                                                    <div className="flex items-center gap-3 mb-1">
+                                                        <h4 className="font-bold text-slate-900 text-lg">{r.company_name || "Unknown Company"}</h4>
+                                                        <span className="bg-amber-100 text-amber-800 text-[10px] font-bold px-2 py-0.5 rounded uppercase tracking-wide">Pending</span>
+                                                    </div>
+                                                    <div className="flex items-center gap-4 text-sm text-slate-600 mb-1">
+                                                        <div className="flex items-center gap-1.5"><User className="h-3.5 w-3.5 text-slate-400" /> {r.full_name} ({r.role})</div>
+                                                        <div className="text-slate-300">•</div>
+                                                        <div className="flex items-center gap-1.5 font-mono text-xs"><ShieldAlert className="h-3.5 w-3.5 text-slate-400" /> NPI: {r.npi_number || "N/A"}</div>
+                                                    </div>
+                                                    
+                                                    {/* CONTACT & DOCUMENT BUTTON */}
+                                                    <div className="flex flex-wrap gap-2 mt-2">
+                                                        <div className="flex items-center gap-4 text-xs font-bold text-indigo-600 bg-indigo-50/50 p-2 rounded-lg border border-indigo-100 w-fit">
+                                                            <div className="flex items-center gap-1.5"><Mail className="h-3 w-3" /> {r.email || "No Email"}</div>
+                                                            <div className="text-indigo-200">|</div>
+                                                            <div className="flex items-center gap-1.5"><Phone className="h-3 w-3" /> {r.phone_number || "No Phone"}</div>
+                                                        </div>
+                                                        
+                                                        {/* VIEW PROOF BUTTON (TRIGGERS MODAL) */}
+                                                        {r.verification_doc_path && (
+                                                            <button 
+                                                                onClick={(e) => { e.stopPropagation(); viewDocument(r.verification_doc_path); }} 
+                                                                className="flex items-center gap-1.5 text-xs font-bold text-emerald-700 bg-emerald-50 p-2 rounded-lg border border-emerald-100 hover:bg-emerald-100 transition-colors"
+                                                            >
+                                                                <Eye className="h-3 w-3" /> View Proof
+                                                            </button>
+                                                        )}
+                                                    </div>
+
+                                                </div>
                                             </div>
-                                            <p className="text-xs text-slate-400 mt-2">Applied: {new Date(r.created_at).toLocaleString()}</p>
+                                            {!isExpanded && (
+                                                <div className="text-xs font-bold text-slate-400 flex items-center gap-1">
+                                                    {r.claimed_trials?.length || 0} Trials Requested <ChevronRight className="h-4 w-4" />
+                                                </div>
+                                            )}
                                         </div>
-                                        <div className="flex items-center gap-3">
-                                            <button onClick={() => rejectResearcher(r.id)} className="px-4 py-2 border border-slate-200 text-slate-500 rounded-xl text-sm font-bold hover:bg-red-50 hover:text-red-600 hover:border-red-200 transition-colors flex items-center gap-2"><X className="h-4 w-4" /> Reject</button>
-                                            <button onClick={() => verifyResearcher(r.id)} className="px-6 py-2 bg-indigo-600 text-white rounded-xl text-sm font-bold hover:bg-indigo-700 shadow-md hover:shadow-lg transition-all flex items-center gap-2"><CheckCircle className="h-4 w-4" /> Approve & Verify</button>
-                                        </div>
+
+                                        {isExpanded && (
+                                            <div className="px-6 pb-6 pl-16 animate-in slide-in-from-top-2">
+                                                <div className="bg-white rounded-xl border border-slate-200 p-6 shadow-sm">
+                                                    <h5 className="text-xs font-bold text-slate-500 uppercase mb-4 flex items-center gap-2">
+                                                        <FlaskConical className="h-4 w-4 text-indigo-600" /> Requested Trials ({r.claimed_trials?.length || 0})
+                                                    </h5>
+                                                    {r.claimed_trials && r.claimed_trials.length > 0 ? (
+                                                        <div className="space-y-3 mb-8">
+                                                            {r.claimed_trials.map((trial: any) => (
+                                                                <div key={trial.id} className="p-4 bg-slate-50 border border-slate-100 rounded-lg">
+                                                                    <div className="flex justify-between items-start gap-4">
+                                                                        <div>
+                                                                            <h6 className="font-bold text-slate-900 text-sm mb-1 leading-snug">{trial.trials?.title || "Unknown Study"}</h6>
+                                                                            <div className="flex items-center gap-3">
+                                                                                <span className="font-mono text-[10px] bg-white border border-slate-200 px-1.5 rounded text-slate-500">{trial.nct_id}</span>
+                                                                                <span className="text-[10px] font-bold text-indigo-600 flex items-center gap-1"><MapPin className="h-3 w-3" /> {trial.site_location?.city}, {trial.site_location?.state}</span>
+                                                                            </div>
+                                                                        </div>
+                                                                        <Link href={`/trial/${trial.nct_id}`} target="_blank" className="p-2 text-slate-400 hover:text-indigo-600 hover:bg-white rounded-lg transition-colors">
+                                                                            <ExternalLink className="h-4 w-4" />
+                                                                        </Link>
+                                                                    </div>
+                                                                </div>
+                                                            ))}
+                                                        </div>
+                                                    ) : (
+                                                        <p className="text-sm text-slate-400 italic mb-6">No trials claimed.</p>
+                                                    )}
+                                                    <div className="flex gap-3 pt-6 border-t border-slate-100">
+                                                        <button onClick={() => rejectResearcher(r.id)} className="flex-1 py-3 border border-slate-200 text-slate-600 rounded-xl text-sm font-bold hover:bg-red-50 hover:text-red-600 hover:border-red-200 transition-colors flex items-center justify-center gap-2">
+                                                            <X className="h-4 w-4" /> Reject Application
+                                                        </button>
+                                                        <button onClick={() => verifyResearcher(r.id)} className="flex-[2] py-3 bg-indigo-600 text-white rounded-xl text-sm font-bold hover:bg-indigo-700 shadow-md hover:shadow-lg transition-all flex items-center justify-center gap-2">
+                                                            <CheckCircle className="h-4 w-4" /> Approve & Verify
+                                                        </button>
+                                                    </div>
+                                                </div>
+                                            </div>
+                                        )}
                                     </div>
-                                </div>
-                            ))
+                                );
+                            })
+                        )}
+                    </div>
+                </div>
+            </div>
+        )}
+
+        {/* --- TAB 3: VERIFIED ACCOUNTS (NEW) --- */}
+        {activeTab === 'verified' && (
+            <div className="max-w-4xl">
+                <div className="rounded-2xl bg-white shadow-sm border border-slate-200 overflow-hidden">
+                    <div className="p-6 border-b border-slate-100 flex items-center justify-between">
+                        <h3 className="font-bold text-slate-900 flex items-center gap-2"><CheckCircle className="h-5 w-5 text-emerald-600" /> Active Verified Sites</h3>
+                        <button onClick={fetchVerifiedResearchers} className="text-xs font-bold text-indigo-600 bg-indigo-50 px-3 py-1.5 rounded-lg hover:bg-indigo-100 transition-colors">Refresh</button>
+                    </div>
+                    <div className="divide-y divide-slate-100">
+                        {verifiedList.length === 0 ? (
+                            <div className="p-12 text-center text-slate-400">
+                                <Building2 className="h-12 w-12 mx-auto mb-4 opacity-20" />
+                                <p>No verified sites yet.</p>
+                            </div>
+                        ) : (
+                            verifiedList.map((r) => {
+                                const isExpanded = expandedResearcherId === r.id;
+                                return (
+                                    <div key={r.id} className={`group transition-all ${isExpanded ? 'bg-slate-50' : 'hover:bg-slate-50'}`}>
+                                        <div 
+                                            className="p-6 flex items-center justify-between cursor-pointer"
+                                            onClick={() => setExpandedResearcherId(isExpanded ? null : r.id)}
+                                        >
+                                            <div className="flex items-center gap-4">
+                                                <div className={`p-1.5 rounded-lg transition-colors ${isExpanded ? 'bg-emerald-100 text-emerald-600' : 'bg-slate-100 text-slate-400'}`}>
+                                                    {isExpanded ? <ChevronUp className="h-4 w-4" /> : <ChevronDown className="h-4 w-4" />}
+                                                </div>
+                                                <div>
+                                                    <div className="flex items-center gap-3 mb-1">
+                                                        <h4 className="font-bold text-slate-900 text-lg">{r.company_name || "Unknown Company"}</h4>
+                                                        <span className="bg-emerald-100 text-emerald-800 text-[10px] font-bold px-2 py-0.5 rounded uppercase tracking-wide">Live</span>
+                                                    </div>
+                                                    <div className="flex items-center gap-4 text-xs font-bold text-slate-500 bg-white border border-slate-200 px-2 py-1 rounded-lg w-fit mt-1">
+                                                        <div className="flex items-center gap-1.5"><Mail className="h-3 w-3" /> {r.email || "N/A"}</div>
+                                                        <div className="text-slate-200">|</div>
+                                                        <div className="flex items-center gap-1.5"><Phone className="h-3 w-3" /> {r.phone_number || "N/A"}</div>
+                                                    </div>
+
+                                                    {/* VIEW PROOF BUTTON (VERIFIED TAB) */}
+                                                    {r.verification_doc_path && (
+                                                        <button 
+                                                            onClick={(e) => { e.stopPropagation(); viewDocument(r.verification_doc_path); }} 
+                                                            className="flex items-center gap-1.5 text-xs font-bold text-emerald-700 bg-emerald-50 p-2 rounded-lg border border-emerald-100 hover:bg-emerald-100 transition-colors mt-2 w-fit"
+                                                        >
+                                                            <Eye className="h-3 w-3" /> View Proof
+                                                        </button>
+                                                    )}
+                                                </div>
+                                            </div>
+                                            {!isExpanded && (
+                                                <div className="text-xs font-bold text-slate-400 flex items-center gap-1">
+                                                    {r.claimed_trials?.length || 0} Active Trials <ChevronRight className="h-4 w-4" />
+                                                </div>
+                                            )}
+                                        </div>
+
+                                        {isExpanded && (
+                                            <div className="px-6 pb-6 pl-16 animate-in slide-in-from-top-2">
+                                                <div className="bg-white rounded-xl border border-slate-200 p-6 shadow-sm">
+                                                    <h5 className="text-xs font-bold text-slate-500 uppercase mb-4 flex items-center gap-2">
+                                                        <FlaskConical className="h-4 w-4 text-emerald-600" /> Linked Trials ({r.claimed_trials?.length || 0})
+                                                    </h5>
+                                                    {r.claimed_trials && r.claimed_trials.length > 0 ? (
+                                                        <div className="space-y-3">
+                                                            {r.claimed_trials.map((trial: any) => (
+                                                                <div key={trial.id} className="p-4 bg-slate-50 border border-slate-100 rounded-lg flex items-center justify-between group/trial">
+                                                                    <div className="flex-1">
+                                                                        <h6 className="font-bold text-slate-900 text-sm mb-1 leading-snug">{trial.trials?.title || "Unknown Study"}</h6>
+                                                                        <div className="flex items-center gap-3">
+                                                                            <span className="font-mono text-[10px] bg-white border border-slate-200 px-1.5 rounded text-slate-500">{trial.nct_id}</span>
+                                                                            <span className="text-[10px] font-bold text-indigo-600 flex items-center gap-1"><MapPin className="h-3 w-3" /> {trial.site_location?.city}, {trial.site_location?.state}</span>
+                                                                        </div>
+                                                                    </div>
+                                                                    <div className="flex items-center gap-2 pl-4 border-l border-slate-200">
+                                                                        <Link href={`/trial/${trial.nct_id}`} target="_blank" className="p-2 text-slate-400 hover:text-indigo-600 hover:bg-white rounded-lg transition-colors">
+                                                                            <ExternalLink className="h-4 w-4" />
+                                                                        </Link>
+                                                                        <button 
+                                                                            onClick={() => unlinkTrial(trial.id, r.id)}
+                                                                            className="p-2 text-slate-400 hover:text-red-600 hover:bg-red-50 rounded-lg transition-colors"
+                                                                            title="Unlink (Delete) this trial from researcher"
+                                                                        >
+                                                                            <Trash2 className="h-4 w-4" />
+                                                                        </button>
+                                                                    </div>
+                                                                </div>
+                                                            ))}
+                                                        </div>
+                                                    ) : (
+                                                        <p className="text-sm text-slate-400 italic">No trials currently active.</p>
+                                                    )}
+                                                </div>
+                                            </div>
+                                        )}
+                                    </div>
+                                );
+                            })
                         )}
                     </div>
                 </div>
@@ -365,6 +618,37 @@ export default function SystemOps() {
         )}
 
       </main>
+
+      {/* --- DOCUMENT VIEWER MODAL (POPUP) --- */}
+      {viewDocUrl && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-900/80 backdrop-blur-sm animate-in fade-in duration-200">
+            <div className="bg-white rounded-2xl w-full max-w-4xl h-[85vh] flex flex-col shadow-2xl overflow-hidden relative">
+                {/* Modal Header */}
+                <div className="p-4 border-b flex justify-between items-center bg-slate-50">
+                    <div>
+                        <h3 className="font-bold text-slate-800">Verification Document</h3>
+                        <p className="text-xs text-slate-500">Secure link active for 10 minutes.</p>
+                    </div>
+                    <button 
+                        onClick={closeDocument} 
+                        className="p-2 hover:bg-slate-200 rounded-full transition-colors"
+                    >
+                        <X className="h-6 w-6 text-slate-500" />
+                    </button>
+                </div>
+                
+                {/* Modal Body (Iframe) */}
+                <div className="flex-1 bg-slate-100 p-4 relative">
+                    <iframe 
+                        src={viewDocUrl} 
+                        className="w-full h-full rounded-lg border border-slate-200 bg-white shadow-sm" 
+                        title="Verification Document"
+                    />
+                </div>
+            </div>
+        </div>
+      )}
+
     </div>
   );
 }
