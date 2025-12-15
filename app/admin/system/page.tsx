@@ -2,7 +2,7 @@
 
 import { useState, useEffect } from "react";
 import Link from "next/link"; 
-import { useRouter } from "next/navigation"; 
+import { useRouter, useSearchParams } from "next/navigation"; 
 import Navbar from "@/components/Navbar";
 import { supabase } from "@/lib/supabase"; 
 import { 
@@ -10,17 +10,18 @@ import {
   Bot, Sparkles, Play, AlertCircle, History, ExternalLink,
   ArrowLeft, ChevronDown, ChevronUp, Clock, Check, Undo,
   FileText, ListChecks, BookOpen, ShieldAlert, Building2, User, X,
-  ShieldCheck, MapPin, FlaskConical, ChevronRight, Mail, Phone, Trash2, Eye
+  ShieldCheck, MapPin, FlaskConical, ChevronRight, Mail, Phone, Trash2, Eye,
+  Lock, QrCode, Smartphone
 } from "lucide-react";
 
 const wait = (ms: number) => new Promise(resolve => setTimeout(resolve, ms));
 
-// 🔒 SECURITY: Replace this with the exact email you use to log in!
-const ADMIN_EMAIL = "akobic14@gmail.com"; 
-
 export default function SystemOps() {
   const router = useRouter();
-  const [activeTab, setActiveTab] = useState<'trials' | 'researchers' | 'verified'>('trials');
+  const searchParams = useSearchParams();
+  
+  // Initialize tab from URL or default to 'trials'
+  const [activeTab, setActiveTab] = useState<'trials' | 'researchers' | 'verified' | 'security'>('trials');
   
   // Trial State
   const [syncLoading, setSyncLoading] = useState(false);
@@ -38,28 +39,62 @@ export default function SystemOps() {
   const [verifiedList, setVerifiedList] = useState<any[]>([]);
   const [expandedResearcherId, setExpandedResearcherId] = useState<string | null>(null);
 
+  // Security (MFA) State
+  const [mfaFactors, setMfaFactors] = useState<any[]>([]);
+  const [showQrModal, setShowQrModal] = useState(false);
+  const [qrCodeUrl, setQrCodeUrl] = useState('');
+  const [verifyCode, setVerifyCode] = useState('');
+  const [factorId, setFactorId] = useState('');
+  const [mfaError, setMfaError] = useState('');
+
   // Document Viewer State (Modal)
   const [viewDocUrl, setViewDocUrl] = useState<string | null>(null);
 
   const [lastSyncTime, setLastSyncTime] = useState<string | null>(null);
   const [lastAiTime, setLastAiTime] = useState<string | null>(null);
 
-  // --- 1. SECURITY CHECK & INITIAL LOAD ---
+  // --- 1. SECURITY CHECK (UPDATED TO USE ADMINS TABLE) ---
   useEffect(() => {
     async function checkUserAndLoad() {
       const { data: { user } } = await supabase.auth.getUser();
       if (!user) { router.push('/login'); return; }
-      if (user.email !== ADMIN_EMAIL) {
-        console.warn("Unauthorized access attempt to System Ops by:", user.email);
-        router.push('/'); return;
+
+      // CHECK DB FOR ADMIN STATUS (Instead of hardcoded email)
+      const { data: adminRecord, error } = await supabase
+        .from('admins')
+        .select('role')
+        .eq('user_id', user.id)
+        .single();
+
+      if (error || !adminRecord) {
+        console.warn("Unauthorized access attempt by:", user.email);
+        router.push('/'); 
+        return;
       }
+      
+      // Load Data
       fetchLists();
       fetchResearcherQueue();
       fetchVerifiedResearchers();
       fetchSystemStats();
+      fetchMfaStatus();
+
+      // Set Active Tab from URL
+      const tabParam = searchParams.get('tab');
+      if (tabParam === 'researchers' || tabParam === 'verified' || tabParam === 'trials' || tabParam === 'security') {
+          setActiveTab(tabParam);
+      }
     }
     checkUserAndLoad();
-  }, [router]);
+  }, [router, searchParams]);
+
+  // --- TAB HANDLER ---
+  const handleTabChange = (tab: 'trials' | 'researchers' | 'verified' | 'security') => {
+      setActiveTab(tab);
+      const newUrl = new URL(window.location.href);
+      newUrl.searchParams.set('tab', tab);
+      window.history.pushState({}, '', newUrl.toString());
+  };
 
   const fetchSystemStats = async () => {
     const { data } = await supabase.from('system_settings').select('*');
@@ -119,39 +154,83 @@ export default function SystemOps() {
     if (data) setVerifiedList(data);
   };
 
+  // --- MFA LOGIC ---
+  const fetchMfaStatus = async () => {
+      const { data, error } = await supabase.auth.mfa.listFactors();
+      if (!error) {
+          setMfaFactors(data.totp);
+      }
+  };
+
+  const startMfaEnrollment = async () => {
+      const { data, error } = await supabase.auth.mfa.enroll({ factorType: 'totp' });
+      if (error) {
+          alert("Error starting enrollment: " + error.message);
+      } else {
+          setFactorId(data.id);
+          setQrCodeUrl(data.totp.qr_code);
+          setShowQrModal(true);
+          setVerifyCode("");
+          setMfaError("");
+      }
+  };
+
+  const verifyMfaEnrollment = async () => {
+      const { data, error } = await supabase.auth.mfa.challengeAndVerify({
+          factorId: factorId,
+          code: verifyCode
+      });
+
+      if (error) {
+          setMfaError("Invalid code. Please try again.");
+      } else {
+          setShowQrModal(false);
+          alert("Success! Two-Factor Authentication is enabled.");
+          fetchMfaStatus();
+      }
+  };
+
+  const removeMfaFactor = async (id: string) => {
+      if(!confirm("Disable 2FA? This will lower your security level.")) return;
+      const { error } = await supabase.auth.mfa.unenroll({ factorId: id });
+      if (error) alert(error.message);
+      else fetchMfaStatus();
+  };
+
   // --- ACTIONS ---
 
-  // 1. VIEW DOCUMENT (MODAL ONLY)
   const viewDocument = async (path: string) => {
     if (!path) return;
-    
-    // Generate secure link
-    const { data, error } = await supabase.storage
-        .from('verifications')
-        .createSignedUrl(path, 600); // 10 mins
-
-    if (error) {
-        alert("Error loading document: " + error.message);
-        return;
-    }
-    
-    // Set URL to state (Triggers Modal)
+    const { data, error } = await supabase.storage.from('verifications').createSignedUrl(path, 600);
+    if (error) { alert("Error loading document: " + error.message); return; }
     setViewDocUrl(data.signedUrl);
   };
 
-  // 2. CLOSE MODAL
-  const closeDocument = () => {
-    setViewDocUrl(null);
-  };
+  const closeDocument = () => setViewDocUrl(null);
 
   const verifyResearcher = async (id: string) => {
     const { error } = await supabase.from('researcher_profiles').update({ is_verified: true }).eq('id', id);
     if (!error) {
-        await supabase.from('claimed_trials').update({ status: 'approved' }).eq('researcher_id', id);
-        alert("Researcher Verified & Trials Approved!"); 
+        const { error: claimError } = await supabase.from('claimed_trials').update({ status: 'approved' }).eq('researcher_id', id);
+        if (claimError) alert("Researcher Verified, BUT automatic trial approval failed.");
+        else alert("Researcher Verified & All Trials Approved!");
         fetchResearcherQueue(); 
         fetchVerifiedResearchers(); 
+    } else {
+        alert("Error verifying profile: " + error.message);
     }
+  };
+
+  const forceApproveTrial = async (claimId: string) => {
+      const { error } = await supabase.from('claimed_trials').update({ status: 'approved' }).eq('id', claimId);
+      if (error) {
+          alert("Error approving trial: " + error.message);
+      } else {
+          setVerifiedList(prev => prev.map(r => ({
+              ...r,
+              claimed_trials: r.claimed_trials.map((t: any) => t.id === claimId ? { ...t, status: 'approved' } : t)
+          })));
+      }
   };
 
   const rejectResearcher = async (id: string) => {
@@ -162,19 +241,17 @@ export default function SystemOps() {
 
   const unlinkTrial = async (claimId: string, researcherId: string) => {
     if(!confirm("Are you sure you want to remove this trial from the researcher's account?")) return;
+    const previousState = [...verifiedList];
+    setVerifiedList(prev => prev.map(r => {
+        if (r.id === researcherId) return { ...r, claimed_trials: r.claimed_trials.filter((t: any) => t.id !== claimId) };
+        return r;
+    }));
     const { error } = await supabase.from('claimed_trials').delete().eq('id', claimId);
-    if (!error) {
-        setVerifiedList(prev => prev.map(r => {
-            if (r.id === researcherId) {
-                return {
-                    ...r,
-                    claimed_trials: r.claimed_trials.filter((t: any) => t.id !== claimId)
-                };
-            }
-            return r;
-        }));
-    } else {
+    if (error) {
         alert("Error deleting trial linkage: " + error.message);
+        setVerifiedList(previousState);
+    } else {
+        fetchVerifiedResearchers();
     }
   };
 
@@ -323,27 +400,38 @@ export default function SystemOps() {
       <Navbar />
       <main className="max-w-7xl mx-auto px-6 py-10">
         
-        {/* HEADER */}
+        {/* HEADER WITH LOGOUT */}
         <div className="flex flex-col md:flex-row md:items-center justify-between mb-8 gap-4">
           <div>
             <h1 className="text-3xl font-bold text-slate-900">System Operations</h1>
             <p className="text-slate-500">Master Control: Data, AI, and User Verification.</p>
           </div>
-          <Link href="/admin" className="flex items-center gap-2 px-5 py-2.5 bg-white border border-slate-200 text-slate-600 font-bold rounded-xl hover:bg-slate-50 hover:text-indigo-600 transition-all shadow-sm">
-            <ArrowLeft className="h-4 w-4" /> Back to Pipeline
-          </Link>
+          <div className="flex items-center gap-3">
+            <button 
+              onClick={async () => { await supabase.auth.signOut(); router.push('/'); }} 
+              className="px-5 py-2.5 bg-white border border-red-200 text-red-600 font-bold rounded-xl hover:bg-red-50 transition-all shadow-sm"
+            >
+              Sign Out
+            </button>
+            <Link href="/admin" className="flex items-center gap-2 px-5 py-2.5 bg-white border border-slate-200 text-slate-600 font-bold rounded-xl hover:bg-slate-50 hover:text-indigo-600 transition-all shadow-sm">
+              <ArrowLeft className="h-4 w-4" /> Pipeline
+            </Link>
+          </div>
         </div>
 
         {/* TABS */}
-        <div className="flex gap-4 mb-8 border-b border-slate-200">
-            <button onClick={() => setActiveTab('trials')} className={`pb-4 px-2 text-sm font-bold border-b-2 transition-colors ${activeTab === 'trials' ? 'border-indigo-600 text-indigo-600' : 'border-transparent text-slate-500 hover:text-slate-700'}`}>
+        <div className="flex gap-4 mb-8 border-b border-slate-200 overflow-x-auto">
+            <button onClick={() => handleTabChange('trials')} className={`pb-4 px-2 text-sm font-bold border-b-2 transition-colors whitespace-nowrap ${activeTab === 'trials' ? 'border-indigo-600 text-indigo-600' : 'border-transparent text-slate-500 hover:text-slate-700'}`}>
                 Trial Management
             </button>
-            <button onClick={() => setActiveTab('researchers')} className={`pb-4 px-2 text-sm font-bold border-b-2 transition-colors ${activeTab === 'researchers' ? 'border-indigo-600 text-indigo-600' : 'border-transparent text-slate-500 hover:text-slate-700'}`}>
+            <button onClick={() => handleTabChange('researchers')} className={`pb-4 px-2 text-sm font-bold border-b-2 transition-colors whitespace-nowrap ${activeTab === 'researchers' ? 'border-indigo-600 text-indigo-600' : 'border-transparent text-slate-500 hover:text-slate-700'}`}>
                 Researcher Approvals {researcherList.length > 0 && <span className="ml-2 bg-red-500 text-white text-[10px] px-1.5 py-0.5 rounded-full">{researcherList.length}</span>}
             </button>
-            <button onClick={() => setActiveTab('verified')} className={`pb-4 px-2 text-sm font-bold border-b-2 transition-colors ${activeTab === 'verified' ? 'border-indigo-600 text-indigo-600' : 'border-transparent text-slate-500 hover:text-slate-700'}`}>
+            <button onClick={() => handleTabChange('verified')} className={`pb-4 px-2 text-sm font-bold border-b-2 transition-colors whitespace-nowrap ${activeTab === 'verified' ? 'border-indigo-600 text-indigo-600' : 'border-transparent text-slate-500 hover:text-slate-700'}`}>
                 Active Sites ({verifiedList.length})
+            </button>
+            <button onClick={() => handleTabChange('security')} className={`pb-4 px-2 text-sm font-bold border-b-2 transition-colors whitespace-nowrap flex items-center gap-2 ${activeTab === 'security' ? 'border-emerald-600 text-emerald-700' : 'border-transparent text-slate-500 hover:text-slate-700'}`}>
+                <ShieldCheck className="h-4 w-4" /> Security & MFA
             </button>
         </div>
 
@@ -514,7 +602,7 @@ export default function SystemOps() {
             </div>
         )}
 
-        {/* --- TAB 3: VERIFIED ACCOUNTS (NEW) --- */}
+        {/* --- TAB 3: VERIFIED ACCOUNTS --- */}
         {activeTab === 'verified' && (
             <div className="max-w-4xl">
                 <div className="rounded-2xl bg-white shadow-sm border border-slate-200 overflow-hidden">
@@ -585,9 +673,24 @@ export default function SystemOps() {
                                                                         <div className="flex items-center gap-3">
                                                                             <span className="font-mono text-[10px] bg-white border border-slate-200 px-1.5 rounded text-slate-500">{trial.nct_id}</span>
                                                                             <span className="text-[10px] font-bold text-indigo-600 flex items-center gap-1"><MapPin className="h-3 w-3" /> {trial.site_location?.city}, {trial.site_location?.state}</span>
+                                                                            
+                                                                            {/* STATUS INDICATOR */}
+                                                                            {trial.status !== 'approved' && <span className="bg-amber-100 text-amber-700 text-[10px] font-bold px-2 py-0.5 rounded">Pending Auth</span>}
                                                                         </div>
                                                                     </div>
                                                                     <div className="flex items-center gap-2 pl-4 border-l border-slate-200">
+                                                                        
+                                                                        {/* --- FORCE APPROVE BUTTON (THE FIX) --- */}
+                                                                        {trial.status !== 'approved' && (
+                                                                            <button 
+                                                                                onClick={() => forceApproveTrial(trial.id)}
+                                                                                className="p-2 text-emerald-600 hover:bg-emerald-50 rounded-lg transition-colors"
+                                                                                title="Force Approve this Trial Claim"
+                                                                            >
+                                                                                <CheckCircle className="h-4 w-4" />
+                                                                            </button>
+                                                                        )}
+
                                                                         <Link href={`/trial/${trial.nct_id}`} target="_blank" className="p-2 text-slate-400 hover:text-indigo-600 hover:bg-white rounded-lg transition-colors">
                                                                             <ExternalLink className="h-4 w-4" />
                                                                         </Link>
@@ -617,36 +720,96 @@ export default function SystemOps() {
             </div>
         )}
 
+        {/* --- TAB 4: SECURITY (MFA ENROLLMENT) --- */}
+        {activeTab === 'security' && (
+            <div className="max-w-2xl">
+                <div className="rounded-2xl bg-white shadow-sm border border-slate-200 overflow-hidden mb-8">
+                    <div className="p-6 border-b border-slate-100">
+                        <h3 className="font-bold text-slate-900 flex items-center gap-2"><Lock className="h-5 w-5 text-emerald-600" /> Two-Factor Authentication (2FA)</h3>
+                        <p className="text-sm text-slate-500 mt-1">Protect your admin account with a second layer of security.</p>
+                    </div>
+                    <div className="p-8">
+                        {mfaFactors.length > 0 ? (
+                            <div className="space-y-6">
+                                <div className="p-4 bg-emerald-50 border border-emerald-100 rounded-xl flex items-start gap-4">
+                                    <div className="p-2 bg-white rounded-full text-emerald-600 shadow-sm"><CheckCircle className="h-6 w-6" /></div>
+                                    <div>
+                                        <h4 className="font-bold text-emerald-800">MFA is Active</h4>
+                                        <p className="text-sm text-emerald-700 mt-1">Your account is secured with Authenticator App (TOTP).</p>
+                                    </div>
+                                </div>
+                                <div className="border-t border-slate-100 pt-6">
+                                    <button 
+                                        onClick={() => removeMfaFactor(mfaFactors[0].id)} 
+                                        className="text-red-600 hover:text-red-700 text-sm font-bold flex items-center gap-2"
+                                    >
+                                        <Trash2 className="h-4 w-4" /> Disable 2FA (Not Recommended)
+                                    </button>
+                                </div>
+                            </div>
+                        ) : (
+                            <div className="text-center py-8">
+                                <div className="w-16 h-16 bg-slate-100 rounded-full flex items-center justify-center mx-auto mb-4 text-slate-400">
+                                    <Smartphone className="h-8 w-8" />
+                                </div>
+                                <h4 className="text-lg font-bold text-slate-900 mb-2">Secure Your Account</h4>
+                                <p className="text-slate-500 text-sm mb-6 max-w-sm mx-auto">Scan a QR code with your authenticator app (Google Authenticator, Authy, etc) to enable 2FA.</p>
+                                <button 
+                                    onClick={startMfaEnrollment} 
+                                    className="bg-slate-900 text-white px-6 py-3 rounded-xl font-bold hover:bg-slate-800 shadow-lg transition-all flex items-center gap-2 mx-auto"
+                                >
+                                    <QrCode className="h-4 w-4" /> Setup Authenticator App
+                                </button>
+                            </div>
+                        )}
+                    </div>
+                </div>
+            </div>
+        )}
+
       </main>
 
       {/* --- DOCUMENT VIEWER MODAL (POPUP) --- */}
       {viewDocUrl && (
         <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-900/80 backdrop-blur-sm animate-in fade-in duration-200">
             <div className="bg-white rounded-2xl w-full max-w-4xl h-[85vh] flex flex-col shadow-2xl overflow-hidden relative">
-                {/* Modal Header */}
                 <div className="p-4 border-b flex justify-between items-center bg-slate-50">
                     <div>
                         <h3 className="font-bold text-slate-800">Verification Document</h3>
                         <p className="text-xs text-slate-500">Secure link active for 10 minutes.</p>
                     </div>
-                    <button 
-                        onClick={closeDocument} 
-                        className="p-2 hover:bg-slate-200 rounded-full transition-colors"
-                    >
-                        <X className="h-6 w-6 text-slate-500" />
-                    </button>
+                    <button onClick={closeDocument} className="p-2 hover:bg-slate-200 rounded-full transition-colors"><X className="h-6 w-6 text-slate-500" /></button>
                 </div>
-                
-                {/* Modal Body (Iframe) */}
-                <div className="flex-1 bg-slate-100 p-4 relative">
-                    <iframe 
-                        src={viewDocUrl} 
-                        className="w-full h-full rounded-lg border border-slate-200 bg-white shadow-sm" 
-                        title="Verification Document"
-                    />
-                </div>
+                <div className="flex-1 bg-slate-100 p-4 relative"><iframe src={viewDocUrl} className="w-full h-full rounded-lg border border-slate-200 bg-white shadow-sm" title="Verification Document" /></div>
             </div>
         </div>
+      )}
+
+      {/* --- QR CODE MODAL --- */}
+      {showQrModal && (
+          <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-900/80 backdrop-blur-sm animate-in zoom-in-95 duration-200">
+              <div className="bg-white rounded-2xl p-8 w-full max-w-sm shadow-2xl text-center">
+                  <h3 className="font-bold text-xl mb-6">Scan with Authenticator</h3>
+                  <div className="bg-white p-2 rounded-xl border border-slate-200 inline-block mb-6 shadow-inner">
+                      <img src={qrCodeUrl} alt="QR Code" className="w-48 h-48" />
+                  </div>
+                  <div className="mb-6 text-left">
+                      <label className="block text-xs font-bold text-slate-500 uppercase mb-1">Enter 6-digit Code</label>
+                      <input 
+                          type="text" 
+                          placeholder="123456" 
+                          className="w-full text-center text-2xl font-mono tracking-widest p-3 border border-slate-200 rounded-xl outline-none focus:ring-2 focus:ring-indigo-500"
+                          value={verifyCode}
+                          onChange={(e) => setVerifyCode(e.target.value.replace(/\D/g,'').slice(0,6))}
+                      />
+                      {mfaError && <p className="text-red-500 text-xs mt-2 font-bold">{mfaError}</p>}
+                  </div>
+                  <div className="flex gap-3">
+                      <button onClick={() => setShowQrModal(false)} className="flex-1 py-3 border border-slate-200 rounded-xl font-bold text-slate-600 hover:bg-slate-50">Cancel</button>
+                      <button onClick={verifyMfaEnrollment} disabled={verifyCode.length < 6} className="flex-1 py-3 bg-indigo-600 text-white rounded-xl font-bold hover:bg-indigo-700 disabled:opacity-50 shadow-lg">Verify</button>
+                  </div>
+              </div>
+          </div>
       )}
 
     </div>

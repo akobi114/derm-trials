@@ -8,7 +8,8 @@ import {
   CheckCircle2, GraduationCap, HelpCircle,
   MessageSquare, Heart,
   ShieldCheck, Send, Search, ClipboardList, Calendar,
-  Stethoscope, MapPin, Archive, Lock, AlertCircle, Check
+  Stethoscope, MapPin, Archive, Lock, AlertCircle, Check,
+  Sparkles, ArrowUpRight 
 } from 'lucide-react';
 import Link from 'next/link';
 
@@ -43,9 +44,9 @@ export default function CandidateDashboard() {
   const chatContainerRef = useRef<HTMLDivElement>(null); 
   const mainContentRef = useRef<HTMLElement>(null);     
   const selectedChatIdRef = useRef<string | null>(null);
-  const activeTabRef = useRef<string>('home'); // NEW: Tracks tab visibility
+  const activeTabRef = useRef<string>('home'); 
 
-  // Sync Refs with State (Critical for Realtime logic)
+  // Sync Refs with State
   useEffect(() => {
       selectedChatIdRef.current = selectedChatId;
   }, [selectedChatId]);
@@ -54,15 +55,26 @@ export default function CandidateDashboard() {
       activeTabRef.current = activeTab;
   }, [activeTab]);
 
-  // --- 1. INITIAL FETCH ---
+  // --- 1. INITIAL FETCH & SELF-HEALING ---
   const fetchDashboardData = useCallback(async () => {
     try {
       const { data: { user } } = await supabase.auth.getUser();
       if (!user) { router.push('/login'); return; }
 
+      // 1. Fetch Profile
       const { data: profile } = await supabase.from('candidate_profiles').select('*').eq('user_id', user.id).single();
       if (profile) setCandidate(profile);
 
+      // --- SELF-HEALING: Claim Orphaned Leads ---
+      if (user.email) {
+          await supabase
+            .from('leads')
+            .update({ user_id: user.id })
+            .eq('email', user.email)
+            .is('user_id', null);
+      }
+
+      // 2. Fetch Applications
       const { data: apps } = await supabase
           .from('leads')
           .select(`*, trials (title, nct_id, phase)`)
@@ -71,33 +83,42 @@ export default function CandidateDashboard() {
           
       if (apps) {
         const appIds = apps.map(a => a.id);
-        const { data: unread } = await supabase
-            .from('messages')
-            .select('lead_id')
-            .in('lead_id', appIds)
-            .eq('is_read', false)
-            .eq('sender_role', 'researcher');
+        
+        // Fetch Unread Messages
+        let unread: any[] = [];
+        if (appIds.length > 0) {
+            const { data } = await supabase
+                .from('messages')
+                .select('lead_id')
+                .in('lead_id', appIds)
+                .eq('is_read', false)
+                .eq('sender_role', 'researcher');
+            if (data) unread = data;
+        }
 
         const formatted = apps.map(app => ({
             ...app,
-            unread_count: unread?.filter(m => m.lead_id === app.id).length || 0
+            unread_count: unread.filter(m => m.lead_id === app.id).length || 0
         }));
-        setApplications(formatted as Application[]);
         
-        // Auto-select first active chat if none selected
-        if (!selectedChatId && formatted.length > 0) {
-            const firstActive = formatted.find((a: any) => !['Not Eligible', 'Withdrawn', 'Trial Closed'].includes(a.site_status));
-            if (firstActive) setSelectedChatId(firstActive.id);
-        }
+        setApplications(formatted as Application[]);
       }
     } catch (error) {
       console.error("Error loading dashboard:", error);
     } finally {
       setLoading(false);
     }
-  }, [router]);
+  }, [router]); 
 
-  // --- 2. STABLE REALTIME LISTENER ---
+  // --- 2. AUTO-SELECT CHAT ---
+  useEffect(() => {
+    if (!selectedChatId && applications.length > 0) {
+        const firstActive = applications.find((a: any) => !['Not Eligible', 'Withdrawn', 'Trial Closed'].includes(a.site_status));
+        if (firstActive) setSelectedChatId(firstActive.id);
+    }
+  }, [applications]); 
+
+  // --- 3. REALTIME LISTENER ---
   useEffect(() => {
       fetchDashboardData();
 
@@ -110,16 +131,13 @@ export default function CandidateDashboard() {
               const incomingMsg = payload.new;
               
               if (incomingMsg.sender_role === 'researcher') {
-                  // FIX: Check BOTH if the correct chat is selected AND if we are actually on the messages tab
                   const isChatVisible = (selectedChatIdRef.current === incomingMsg.lead_id) && (activeTabRef.current === 'messages');
 
                   if (isChatVisible) {
-                      // CASE A: Chat is OPEN and VISIBLE
                       setMessages(prev => [...prev, incomingMsg]);
                       supabase.from('messages').update({ is_read: true }).eq('id', incomingMsg.id);
                       setApplications(prev => prev.map(a => a.id === incomingMsg.lead_id ? { ...a, unread_count: 0 } : a));
                   } else {
-                      // CASE B: Chat is CLOSED or user is on HOME/EDUCATION tab
                       setApplications(prev => prev.map(a => a.id === incomingMsg.lead_id ? { ...a, unread_count: (a.unread_count || 0) + 1 } : a));
                   }
               }
@@ -129,7 +147,7 @@ export default function CandidateDashboard() {
       return () => { supabase.removeChannel(channel); };
   }, [fetchDashboardData]); 
 
-  // --- 3. FETCH CHAT MESSAGES ---
+  // --- 4. FETCH CHAT MESSAGES ---
   useEffect(() => {
       if (!selectedChatId) return;
       
@@ -142,18 +160,16 @@ export default function CandidateDashboard() {
             
           setMessages(data || []);
           
-          // FIX: Only mark as read if the user is ON the messages tab
           if (activeTab === 'messages') {
               setApplications(prev => prev.map(a => a.id === selectedChatId ? { ...a, unread_count: 0 } : a));
               await supabase.from('messages').update({ is_read: true }).eq('lead_id', selectedChatId).eq('sender_role', 'researcher');
           }
       }
       loadChat();
-  }, [selectedChatId, activeTab]); // Re-run when tab changes
+  }, [selectedChatId, activeTab]); 
 
-  // --- 4. SCROLL LOGIC ---
+  // --- 5. SCROLL LOGIC ---
   useEffect(() => {
-    // Scroll Chat to Bottom (with timeout for paint)
     if (chatContainerRef.current) {
         setTimeout(() => {
             if (chatContainerRef.current) {
@@ -163,15 +179,17 @@ export default function CandidateDashboard() {
     }
   }, [messages, activeTab, selectedChatId]);
 
-  // Scroll Page to Top when switching tabs/chats
   useEffect(() => {
       if (mainContentRef.current) {
           mainContentRef.current.scrollTo({ top: 0, behavior: 'smooth' });
       }
   }, [activeTab, selectedChatId]);
 
-
-  const handleLogout = async () => { await supabase.auth.signOut(); router.push('/login'); };
+  // --- UPDATED LOGOUT FUNCTION ---
+  const handleLogout = async () => { 
+      await supabase.auth.signOut(); 
+      router.push('/'); // Redirects to Homepage instead of Login
+  };
 
   const handleSendMessage = async () => {
     if (!messageInput.trim() || !selectedChatId) return;
@@ -221,7 +239,6 @@ export default function CandidateDashboard() {
             <button onClick={() => setActiveTab('home')} className={`w-full flex items-center gap-3 px-4 py-3.5 rounded-xl font-bold text-sm transition-all ${activeTab === 'home' ? 'bg-indigo-50 text-indigo-700' : 'text-slate-500 hover:bg-slate-50 hover:text-slate-900'}`}><Activity className="h-5 w-5" /> My Dashboard</button>
             <button onClick={() => setActiveTab('messages')} className={`w-full flex items-center gap-3 px-4 py-3.5 rounded-xl font-bold text-sm transition-all ${activeTab === 'messages' ? 'bg-indigo-50 text-indigo-700' : 'text-slate-500 hover:bg-slate-50 hover:text-slate-900'}`}>
                 <MessageSquare className="h-5 w-5" /> Messages
-                {/* SOLID RED BADGE */}
                 {applications.reduce((acc, app) => acc + (app.unread_count || 0), 0) > 0 && <span className="ml-auto bg-red-600 text-white px-2 py-0.5 rounded-full text-[10px] font-bold">{applications.reduce((acc, app) => acc + (app.unread_count || 0), 0)}</span>}
             </button>
             <button onClick={() => setActiveTab('education')} className={`w-full flex items-center gap-3 px-4 py-3.5 rounded-xl font-bold text-sm transition-all ${activeTab === 'education' ? 'bg-indigo-50 text-indigo-700' : 'text-slate-500 hover:bg-slate-50 hover:text-slate-900'}`}><GraduationCap className="h-5 w-5" /> Learning Center</button>
@@ -236,7 +253,7 @@ export default function CandidateDashboard() {
         </div>
       </aside>
 
-      {/* MAIN CONTENT - WITH REF FOR SCROLL TOP */}
+      {/* MAIN CONTENT */}
       <main ref={mainContentRef} className="flex-1 overflow-y-auto bg-slate-50 relative">
         {activeTab === 'home' && (
             <div className="p-6 md:p-12 max-w-5xl mx-auto animate-in fade-in slide-in-from-bottom-4">
@@ -292,6 +309,23 @@ export default function CandidateDashboard() {
                     
                     {/* RIGHT COLUMN */}
                     <div className="space-y-6">
+                        
+                        {/* --- NEW: "APPLY MORE" CARD --- */}
+                        <div className="bg-white p-6 rounded-2xl border border-slate-200 shadow-sm">
+                            <h3 className="font-bold text-slate-900 mb-3 flex items-center gap-2">
+                                <Sparkles className="h-5 w-5 text-amber-500" /> Maximize Your Chances
+                            </h3>
+                            <p className="text-sm text-slate-500 mb-5 leading-relaxed">
+                                Most candidates apply to 2-3 studies to find the perfect match. Don't limit your options.
+                            </p>
+                            <Link href="/" className="flex items-center justify-between w-full p-3 bg-slate-50 hover:bg-slate-100 rounded-xl group transition-all border border-slate-100 hover:border-slate-200">
+                                <span className="text-xs font-bold text-indigo-600">Find More Studies</span>
+                                <div className="w-8 h-8 rounded-full bg-white border border-slate-200 flex items-center justify-center group-hover:bg-indigo-600 group-hover:text-white group-hover:border-indigo-600 transition-all">
+                                    <ArrowUpRight className="h-4 w-4" />
+                                </div>
+                            </Link>
+                        </div>
+
                         <div className="bg-gradient-to-br from-indigo-600 to-purple-700 text-white p-6 rounded-2xl shadow-xl relative overflow-hidden"><div className="absolute top-0 right-0 w-32 h-32 bg-white rounded-full blur-3xl opacity-20 -mr-10 -mt-10"></div><h3 className="font-bold text-lg mb-2 flex items-center gap-2"><Heart className="h-5 w-5 text-pink-400" /> Why Participate?</h3><p className="text-indigo-100 text-sm mb-6 leading-relaxed">Your participation helps develop new treatments that could save lives.</p><button onClick={() => setActiveTab('education')} className="w-full py-2.5 bg-white text-indigo-700 rounded-xl text-xs font-bold hover:bg-indigo-50 transition-colors">Read Patient Guide</button></div>
                         <div className="bg-white p-6 rounded-2xl border border-slate-200 shadow-sm"><h3 className="font-bold text-slate-900 mb-4 text-sm flex items-center gap-2"><HelpCircle className="h-4 w-4 text-slate-400" /> FAQ</h3><div className="space-y-4"><div><h4 className="text-xs font-bold text-slate-900 mb-1">Is it safe?</h4><p className="text-xs text-slate-500 leading-relaxed">All trials are reviewed by an Institutional Review Board (IRB) to ensure safety.</p></div></div></div>
                     </div>
@@ -299,6 +333,7 @@ export default function CandidateDashboard() {
             </div>
         )}
 
+        {/* ... (Messages and Education tabs same as before) ... */}
         {activeTab === 'messages' && (
             <div className="h-[calc(100vh-5rem)] md:h-screen p-4 md:p-8">
                 <div className="max-w-6xl mx-auto h-full bg-white rounded-2xl shadow-xl border border-slate-200 flex overflow-hidden">

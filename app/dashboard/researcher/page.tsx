@@ -35,7 +35,7 @@ export default function ResearcherDashboard() {
   useEffect(() => {
     async function init() {
       const { data: { user } } = await supabase.auth.getUser();
-      if (!user) { router.push('/login'); return; }
+      if (!user) { router.push('/'); return; }
 
       // 1. Get Profile & Tier
       const { data: profileData } = await supabase
@@ -146,6 +146,24 @@ export default function ResearcherDashboard() {
     }
 
     setActionLoading(true);
+
+    // --- SAFETY CHECK START (The Fix) ---
+    // Prevent duplicate trial claims by the same researcher
+    const { data: existingClaim } = await supabase
+        .from('claimed_trials')
+        .select('id')
+        .eq('researcher_id', profile.id)
+        .eq('nct_id', selectedTrial.nct_id)
+        .maybeSingle();
+
+    if (existingClaim) {
+        alert("You have already claimed this study. You cannot currently manage multiple locations for the same trial.");
+        setActionLoading(false);
+        setIsModalOpen(false);
+        return; // Stop execution to prevent duplicate
+    }
+    // --- SAFETY CHECK END ---
+
     const status = profile.is_verified ? 'approved' : 'pending_verification';
 
     const { data, error } = await supabase

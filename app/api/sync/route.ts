@@ -107,12 +107,37 @@ export async function GET() {
           observationalModel: design?.bioSpec?.retention
         };
 
-        // 4. Locations & Contacts
-        const usLocations = contacts?.locations?.filter((loc: any) => loc.country === "United States") || [];
+        // 4. Locations & Contacts (UPDATED: Extracts ALL contacts)
+        const rawLocations = contacts?.locations?.filter((loc: any) => loc.country === "United States") || [];
+        
+        const usLocations = rawLocations.map((loc: any) => {
+            return {
+                facility: loc.facility,
+                city: loc.city,
+                state: loc.state,
+                zip: loc.zip,
+                country: loc.country,
+                geoPoint: loc.geoPoint, // Preserved for Geocoding loop below
+                status: loc.status,
+                // Extract ALL contacts (Coordinators, etc.)
+                location_contacts: loc.contacts?.map((c: any) => ({
+                    name: c.name || null,
+                    phone: c.phone || null,
+                    email: c.email || null,
+                    role: c.role || "Contact"
+                })) || [],
+                // Extract ALL investigators (Doctors/PIs)
+                investigators: loc.investigators?.map((i: any) => ({
+                    name: i.name || null,
+                    role: i.role || "Investigator"
+                })) || []
+            };
+        });
+
         const centralContact = contacts?.centralContacts?.[0] || null;
         const keywords = conditions?.keywords || conditions?.conditions || [];
 
-        // 5. Generate Location String (Critical Fix)
+        // 5. Generate Location String
         const locationString = usLocations.length > 0 
             ? `${usLocations[0].city}, ${usLocations[0].state}` 
             : "United States";
@@ -151,7 +176,7 @@ export async function GET() {
           secondary_outcomes: secondaryOutcomes,
           
           location: locationString, // Required field
-          locations: usLocations,
+          locations: usLocations, // Now contains arrays of contacts
           central_contact: centralContact,
           
           last_updated: new Date().toISOString()
@@ -173,7 +198,7 @@ export async function GET() {
           console.error(`DB Error ${nctId}:`, error.message);
           logs.push(`Error Saving ${nctId}: ${error.message}`);
         } else {
-          // Geocoding
+          // Geocoding logic
           await supabase.from('study_sites').delete().eq('nct_id', nctId);
           const sitesToInsert = [];
           for (const loc of usLocations) {

@@ -15,39 +15,83 @@ import {
   LayoutDashboard, CreditCard, Video, Image as ImageIcon, Check, X,
   Clock, TrendingUp, Crown, Calculator, AlertCircle, CheckCheck,
   Percent, DollarSign, MousePointer2, Sparkles, Construction, Search,
-  Calendar, Archive, Save, UploadCloud, PieChart
+  Calendar, Archive, Save, UploadCloud, PieChart,
+  Gem, Medal, Shield, PenSquare, Info, Copy, ExternalLink, Stethoscope,
+  MoreHorizontal, Globe
 } from "lucide-react";
 
 // 🔒 SECURITY
 const ADMIN_EMAIL = "akobic14@gmail.com"; 
 
-// --- TYPES ---
+// --- TYPES & HELPERS ---
 type LeadStatus = 'New' | 'Contacted' | 'Scheduled' | 'Enrolled' | 'Not Eligible' | 'Withdrawn';
+type TierType = 'diamond' | 'gold' | 'silver' | 'mismatch';
+
+// --- SHARED TIER LOGIC ---
+const calculateTier = (lead: any, questions: any[]) => {
+    if (!questions || questions.length === 0) return null;
+    let correct = 0;
+    let wrong = 0;
+    let unsure = 0;
+    const total = questions.length;
+
+    questions.forEach((q, i) => {
+        const ans = lead.answers && lead.answers[i];
+        if (ans === q.correct_answer) {
+             correct++;
+        } else if (ans && (ans.toLowerCase().includes("know") || ans.toLowerCase().includes("unsure"))) {
+             unsure++;
+        } else {
+             wrong++;
+        }
+    });
+
+    const mismatchRate = wrong / total;
+    let tier: { label: string, icon: any, style: string, type: TierType };
+
+    if (wrong === 0 && unsure === 0) tier = { label: "Perfect Match", icon: Gem, style: "bg-emerald-50 text-emerald-700 border-emerald-100", type: 'diamond' };
+    else if (wrong === 0) tier = { label: "Likely Match", icon: Medal, style: "bg-amber-50 text-amber-700 border-amber-100", type: 'gold' };
+    else if (mismatchRate <= 0.20) tier = { label: "Needs Review", icon: Shield, style: "bg-slate-100 text-slate-600 border-slate-200", type: 'silver' };
+    else tier = { label: "Mismatch", icon: AlertCircle, style: "bg-rose-50 text-rose-700 border-rose-100", type: 'mismatch' };
+
+    const detail = `(${correct}/${total} Met${unsure > 0 ? `, ${unsure} Unsure` : ''}${wrong > 0 ? `, ${wrong} Missed` : ''})`;
+    return { ...tier, detail };
+};
+
+// --- FUZZY MATCHER ---
+const isSameLocation = (leadCity: string, leadState: string, claimCity: string, claimState: string) => {
+    const clean = (str: string) => (str || "").toLowerCase().trim().replace(/[^a-z]/g, "");
+    const lCity = clean(leadCity);
+    const cCity = clean(claimCity);
+    if (lCity && cCity && lCity === cCity) return true;
+    return false;
+};
 
 export default function AdminDashboard() {
   const router = useRouter();
   const searchParams = useSearchParams(); 
   const [loading, setLoading] = useState(true);
-  
+   
   // --- TABS & NAVIGATION ---
-  const [activeTab, setActiveTab] = useState<'claimed' | 'unclaimed' | 'leads'>('claimed');
-  
+  const [activeTab, setActiveTab] = useState<'lead_feed' | 'site_opportunities' | 'active_sites'>('lead_feed');
+   
   // --- GOD MODE STATE ---
   const [viewingClaim, setViewingClaim] = useState<any>(null); 
 
   // --- DATA STATES ---
   const [leads, setLeads] = useState<any[]>([]); 
-  const [claimedTrials, setClaimedTrials] = useState<any[]>([]); 
-  const [unclaimedOpportunities, setUnclaimedOpportunities] = useState<any[]>([]); 
-  
+  const [activeSites, setActiveSites] = useState<any[]>([]); 
+  const [siteOpportunities, setSiteOpportunities] = useState<any[]>([]); 
+   
   // --- FILTER STATE ---
   const [filterNctId, setFilterNctId] = useState<string | null>(null);
 
+  // --- LEAD DETAIL STATE ---
   const [selectedLead, setSelectedLead] = useState<any>(null);
   const [noteText, setNoteText] = useState("");
-  const [savingNote, setSavingNote] = useState(false);
+  const [savingNote, setSavingNote] = useState<string | null>(null);
+  const [savingSiteNote, setSavingSiteNote] = useState<string | null>(null); 
   const [pendingResearchers, setPendingResearchers] = useState(0);
-  const [expandedSections, setExpandedSections] = useState<string[]>(['review']);
 
   // --- 1. SECURITY & INIT ---
   useEffect(() => {
@@ -58,34 +102,128 @@ export default function AdminDashboard() {
         console.warn("Unauthorized access attempt by:", user.email);
         router.push('/'); return;
       }
-      
-      await Promise.all([
-          fetchLeads(),
-          fetchClaimedTrials(), // Updated function below
-          fetchUnclaimedOpportunities(),
-          fetchPendingResearchersCount()
-      ]);
+       
+      await loadDashboardData();
       setLoading(false);
     }
     checkUser();
   }, [router]);
 
-  // --- 2. URL SYNC ---
+  // --- 2. UNIFIED DATA FETCHING ---
+  async function loadDashboardData() {
+      // A. Fetch Claims
+      const { data: claims } = await supabase
+        .from('claimed_trials')
+        .select(`*, trials (title, screener_questions), researcher_profiles (company_name, full_name, email, phone_number)`)
+        .eq('status', 'approved');
+
+      // B. Fetch Leads (Includes Central Contact)
+      const { data: rawLeads } = await supabase
+        .from('leads')
+        .select(`*, trials (title, nct_id, screener_questions, inclusion_criteria, locations, central_contact)`) 
+        .order('created_at', { ascending: false });
+
+      // C. Fetch Site Notes
+      const { data: siteNotes } = await supabase.from('admin_site_notes').select('*');
+
+      if (!rawLeads) return;
+
+      // D. Process Active Sites
+      const sites = (claims || []).map((claim: any) => {
+          const leadStatuses = rawLeads.filter(l => 
+              l.trial_id === claim.nct_id && 
+              isSameLocation(l.site_city, l.site_state, claim.site_location?.city, claim.site_location?.state)
+          );
+          
+          return {
+              ...claim,
+              stats: {
+                  total: leadStatuses.length,
+                  new: leadStatuses.filter(l => l.site_status === 'New').length,
+                  screening: leadStatuses.filter(l => l.site_status === 'Contacted').length,
+                  scheduled: leadStatuses.filter(l => l.site_status === 'Scheduled').length,
+                  enrolled: leadStatuses.filter(l => l.site_status === 'Enrolled').length
+              }
+          };
+      });
+      setActiveSites(sites.sort((a,b) => b.stats.total - a.stats.total));
+
+      // E. Process Leads
+      const enrichedLeads = rawLeads.map((lead: any) => {
+          const matchingClaim = sites.find((c: any) => 
+              c.nct_id === lead.trial_id && 
+              isSameLocation(lead.site_city, lead.site_state, c.site_location?.city, c.site_location?.state)
+          );
+
+          return { 
+              ...lead, 
+              trial_title: lead.trials?.title, 
+              trial_questions: lead.trials?.screener_questions, 
+              trial_criteria: lead.trials?.inclusion_criteria, 
+              trial_locations: lead.trials?.locations,
+              trial_central: lead.trials?.central_contact, 
+              is_claimed: !!matchingClaim, 
+              researcher: matchingClaim ? matchingClaim.researcher_profiles : null 
+          };
+      });
+      setLeads(enrichedLeads);
+
+      // F. Process Opportunities
+      const opportunities: any = {};
+      const unclaimedLeads = enrichedLeads.filter((l: any) => !l.is_claimed && ['New', 'Strong Lead', 'Unlikely - Review Needed'].includes(l.status));
+      
+      for (const lead of unclaimedLeads) {
+          const key = `${lead.trial_id}-${lead.site_city}-${lead.site_state}`;
+          if (!opportunities[key]) {
+              // Find existing note for this site
+              const existingNote = siteNotes?.find(n => 
+                  n.nct_id === lead.trial_id && 
+                  isSameLocation(lead.site_city, lead.site_state, n.city, n.state)
+              );
+
+              opportunities[key] = { 
+                  id: key, 
+                  nct_id: lead.trial_id, 
+                  title: lead.trials?.title, 
+                  city: lead.site_city, 
+                  state: lead.site_state, 
+                  count: 0,
+                  leads: [], 
+                  admin_note: existingNote?.notes || "", 
+                  trials: lead.trials, 
+                  site_location: { city: lead.site_city, state: lead.site_state },
+                  researcher_profiles: { company_name: "Unclaimed Site" }
+              };
+          }
+          opportunities[key].count++;
+          opportunities[key].leads.push(lead);
+      }
+      setSiteOpportunities(Object.values(opportunities).sort((a: any, b: any) => b.count - a.count));
+
+      // G. Pending Count
+      const { count } = await supabase.from('researcher_profiles').select('*', { count: 'exact', head: true }).eq('is_verified', false);
+      if (count !== null) setPendingResearchers(count);
+  }
+
+  // --- URL SYNC ---
   useEffect(() => {
-      if (!loading && claimedTrials.length > 0) {
+      if (!loading && activeSites.length > 0) {
           const claimIdFromUrl = searchParams.get('claim_id');
           if (claimIdFromUrl) {
-              const claimToView = claimedTrials.find(c => c.id === claimIdFromUrl);
+              const claimToView = activeSites.find(c => c.id === claimIdFromUrl);
               if (claimToView) setViewingClaim(claimToView);
           }
       }
-  }, [loading, claimedTrials, searchParams]);
+  }, [loading, activeSites, searchParams]);
 
+  // --- GOD MODE HANDLERS ---
   const enterGodMode = (claim: any) => {
       setViewingClaim(claim);
-      const newUrl = new URL(window.location.href);
-      newUrl.searchParams.set('claim_id', claim.id);
-      window.history.pushState({}, '', newUrl.toString());
+      if (claim.id !== 'virtual') {
+          const newUrl = new URL(window.location.href);
+          newUrl.searchParams.set('claim_id', claim.id);
+          window.history.pushState({}, '', newUrl.toString());
+      }
   };
 
   const exitGodMode = () => {
@@ -95,109 +233,88 @@ export default function AdminDashboard() {
       window.history.pushState({}, '', newUrl.toString());
   };
 
-  // --- 4. DATA FETCHING ---
-  async function fetchLeads() {
-    const { data } = await supabase
-      .from('leads')
-      .select(`*, trials (title, nct_id, screener_questions, inclusion_criteria)`)
-      .order('created_at', { ascending: false });
-
-    if (data) {
-        const enriched = await Promise.all(data.map(async (lead) => {
-            const { data: claim } = await supabase.from('claimed_trials').select('researcher_id, researcher_profiles(company_name, email)').eq('nct_id', lead.trial_id).contains('site_location', { city: lead.site_city, state: lead.site_state }).maybeSingle(); 
-            return { ...lead, trial_title: lead.trials?.title, trial_questions: lead.trials?.screener_questions, trial_criteria: lead.trials?.inclusion_criteria, is_claimed: !!claim, researcher: claim ? claim.researcher_profiles : null };
-        }));
-        setLeads(enriched);
-    }
-  }
-
-  // UPDATED: Now fetches detailed status counts
-  async function fetchClaimedTrials() {
-      const { data } = await supabase
-        .from('claimed_trials')
-        .select(`*, trials (title, screener_questions), researcher_profiles (company_name, full_name, email, phone_number)`)
-        .eq('status', 'approved');
-      
-      if (data) {
-          const withCounts = await Promise.all(data.map(async (claim) => {
-              // Fetch only the status column for efficiency
-              const { data: leadStatuses } = await supabase
-                  .from('leads')
-                  .select('site_status')
-                  .eq('trial_id', claim.nct_id)
-                  .eq('site_city', claim.site_location?.city)
-                  .eq('site_state', claim.site_location?.state);
-              
-              const stats = {
-                  total: leadStatuses?.length || 0,
-                  new: leadStatuses?.filter(l => l.site_status === 'New').length || 0,
-                  screening: leadStatuses?.filter(l => l.site_status === 'Contacted').length || 0,
-                  scheduled: leadStatuses?.filter(l => l.site_status === 'Scheduled').length || 0,
-                  enrolled: leadStatuses?.filter(l => l.site_status === 'Enrolled').length || 0
-              };
-
-              return { ...claim, stats };
-          }));
-          setClaimedTrials(withCounts.sort((a,b) => b.stats.total - a.stats.total));
+  // --- CONTACT STRATEGY ---
+  const getContactStrategy = (lead: any) => {
+      let location = null;
+      if (lead.trial_locations) {
+          location = lead.trial_locations.find((l: any) => isSameLocation(lead.site_city, lead.site_state, l.city, l.state));
       }
-  }
 
-  async function fetchUnclaimedOpportunities() {
-      const { data: activeLeads } = await supabase.from('leads').select('trial_id, site_city, site_state, trials(title)').in('status', ['New', 'Strong Lead', 'Unlikely - Review Needed']);
-      if (!activeLeads) return;
-      const opportunities: any = {};
-      for (const lead of activeLeads) {
-          const key = `${lead.trial_id}-${lead.site_city}-${lead.site_state}`;
-          if (!opportunities[key]) {
-              const { data: claim } = await supabase.from('claimed_trials').select('id').eq('nct_id', lead.trial_id).contains('site_location', { city: lead.site_city, state: lead.site_state }).maybeSingle();
-              if (!claim) {
-                  opportunities[key] = { id: key, nct_id: lead.trial_id, title: lead.trials?.title, city: lead.site_city, state: lead.site_state, count: 0 };
-              }
-          }
-          if (opportunities[key]) opportunities[key].count++;
+      const localContacts = [
+          ...(location?.location_contacts || []),
+          ...(location?.investigators || [])
+      ];
+      const facility = location?.facility;
+      const fullAddress = location ? `${location.city}, ${location.state} ${location.zip || ''}` : null;
+      const central = lead.trial_central;
+
+      let bestType = 'none';
+      let bestData = null;
+
+      if (localContacts.length > 0) {
+          bestType = 'local';
+          bestData = localContacts[0];
+      } else if (facility) {
+          bestType = 'facility';
+          bestData = facility;
+      } else if (central) {
+          bestType = 'central';
+          bestData = central;
       }
-      setUnclaimedOpportunities(Object.values(opportunities).sort((a: any, b: any) => b.count - a.count));
-  }
 
-  async function fetchPendingResearchersCount() {
-    const { count } = await supabase.from('researcher_profiles').select('*', { count: 'exact', head: true }).eq('is_verified', false);
-    if (count !== null) setPendingResearchers(count);
-  }
-
-  // --- ACTIONS ---
-  const clearFilter = () => setFilterNctId(null);
-
-  const markTrialClosed = async (opp: any) => {
-      if (!confirm(`Are you sure you want to CLOSE ${opp.nct_id} in ${opp.city}? This will archive ${opp.count} pending leads.`)) return;
-      const { error } = await supabase.from('leads').update({ status: 'Trial Closed', admin_notes: 'Trial site marked as closed/unresponsive by Admin.' }).eq('trial_id', opp.nct_id).eq('site_city', opp.city).eq('site_state', opp.state).neq('status', 'Trial Closed');
-      if (!error) { alert("Trial closed."); fetchUnclaimedOpportunities(); fetchLeads(); } else { alert("Error: " + error.message); }
+      return { location, localContacts, facility, fullAddress, central, bestType, bestData };
   };
 
-  const toggleSection = (section: string) => setExpandedSections(prev => prev.includes(section) ? prev.filter(s => s !== section) : [...prev, section]);
-  const deleteLead = async (id: any) => { if (!confirm("Delete lead?")) return; await supabase.from('leads').delete().eq('id', id); setLeads(l => l.filter(x => x.id !== id)); if(selectedLead?.id===id) setSelectedLead(null); };
-  const updateLeadStatus = async (id: any, newStatus: string) => { await supabase.from('leads').update({ status: newStatus }).eq('id', id); setLeads(l => l.map(x => x.id === id ? { ...x, status: newStatus } : x)); if(selectedLead?.id===id) setSelectedLead(p => ({...p, status: newStatus})); };
-  const saveNoteManual = async () => { if (!selectedLead) return; setSavingNote(true); await supabase.from('leads').update({ admin_notes: noteText }).eq('id', selectedLead.id); setLeads(l => l.map(x => x.id === selectedLead.id ? { ...x, admin_notes: noteText } : x)); setSavingNote(false); };
-  const sendInviteEmail = (lead: any) => { alert(`Simulated Invite to Site for ${lead.trial_id}`); }; 
+  const generateEmailDraft = (lead: any, specificContact?: any) => {
+      const strategy = getContactStrategy(lead);
+      const contact = specificContact || strategy.localContacts[0] || strategy.central || { name: "Coordinator" };
+      const contactName = contact.name || "Coordinator";
+      const tier = calculateTier(lead, lead.trial_questions);
+      
+      const body = `Hi ${contactName},\n\nI have a pre-screened patient candidate for your study in ${lead.site_city}.\n\nCandidate: ${lead.name}\nStatus: ${tier?.label || 'Verified Match'}\n\nWe are holding this lead in our secure portal. Please claim your free account on DermTrials to view their full details and contact them directly:\n\n[Link to Claim Account]\n\nBest,\nAdmin Team`;
+      
+      navigator.clipboard.writeText(body);
+      alert("Email draft copied to clipboard!");
+  };
+
+  // --- LIVE NOTE UPDATING (LEADS) ---
+  const updateLeadNote = async (leadId: string, text: string) => {
+      setSavingNote(leadId); 
+      await supabase.from('leads').update({ admin_notes: text }).eq('id', leadId);
+      setLeads(current => current.map(l => l.id === leadId ? { ...l, admin_notes: text } : l));
+      setSavingNote(null);
+  };
+
+  // --- LIVE NOTE UPDATING (SITES) ---
+  const updateSiteNote = async (oppId: string, nctId: string, city: string, state: string, text: string) => {
+      setSavingSiteNote(oppId);
+      
+      await supabase.from('admin_site_notes').upsert({ 
+          nct_id: nctId, 
+          city: city, 
+          state: state, 
+          notes: text 
+      }, { onConflict: 'nct_id, city, state' });
+
+      setSiteOpportunities(current => current.map(o => o.id === oppId ? { ...o, admin_note: text } : o));
+      setSavingSiteNote(null);
+  };
+
+  // --- MANUAL SAVE FOR DRAWER ---
+  const saveNoteManual = async () => { 
+      if (!selectedLead) return; 
+      setSavingNote(selectedLead.id); 
+      await supabase.from('leads').update({ admin_notes: noteText }).eq('id', selectedLead.id); 
+      setLeads(l => l.map(x => x.id === selectedLead.id ? { ...x, admin_notes: noteText } : x)); 
+      setSavingNote(null); 
+  };
 
   // --- RENDER ---
   if (loading) return <div className="min-h-screen bg-slate-50 flex items-center justify-center"><Loader2 className="h-8 w-8 animate-spin text-indigo-600" /></div>;
 
   if (viewingClaim) {
-      return (
-          <GodModeView 
-            claim={viewingClaim} 
-            onBack={exitGodMode} 
-          />
-      );
+      return <GodModeView claim={viewingClaim} onBack={exitGodMode} />;
   }
-
-  const visibleLeads = filterNctId ? leads.filter(l => l.trial_id === filterNctId) : leads;
-  const isNew = (s: string) => ['Strong Lead', 'Unlikely - Review Needed', 'New'].includes(s);
-  const leadsToReview = visibleLeads.filter(l => isNew(l.status));
-  const leadsPending = visibleLeads.filter(l => l.status === 'Pending');
-  const leadsSent = visibleLeads.filter(l => l.status === 'Sent to Site');
-  const leadsReferred = visibleLeads.filter(l => l.status === 'Referred');
-  const leadsRejected = visibleLeads.filter(l => l.status === 'Rejected');
 
   return (
     <div className="min-h-screen bg-slate-50 pb-20 font-sans">
@@ -210,19 +327,234 @@ export default function AdminDashboard() {
         </div>
 
         <div className="flex gap-6 mb-8 border-b border-slate-200">
-            <button onClick={() => setActiveTab('claimed')} className={`pb-4 px-2 text-sm font-bold border-b-2 transition-colors ${activeTab === 'claimed' ? 'border-indigo-600 text-indigo-600' : 'border-transparent text-slate-500 hover:text-slate-700'}`}>Active Sites (God Mode)</button>
-            <button onClick={() => setActiveTab('unclaimed')} className={`pb-4 px-2 text-sm font-bold border-b-2 transition-colors ${activeTab === 'unclaimed' ? 'border-indigo-600 text-indigo-600' : 'border-transparent text-slate-500 hover:text-slate-700'}`}>Sales Opportunities <span className="bg-amber-100 text-amber-800 px-1.5 py-0.5 rounded text-[10px] ml-1">{unclaimedOpportunities.length}</span></button>
-            <button onClick={() => setActiveTab('leads')} className={`pb-4 px-2 text-sm font-bold border-b-2 transition-colors ${activeTab === 'leads' ? 'border-indigo-600 text-indigo-600' : 'border-transparent text-slate-500 hover:text-slate-700'}`}>Patient Pipeline ({visibleLeads.length})</button>
+            <button onClick={() => setActiveTab('lead_feed')} className={`pb-4 px-2 text-sm font-bold border-b-2 transition-colors flex items-center gap-2 ${activeTab === 'lead_feed' ? 'border-indigo-600 text-indigo-600' : 'border-transparent text-slate-500 hover:text-slate-700'}`}><Mail className="h-4 w-4" /> Lead Feed (Outreach)</button>
+            <button onClick={() => setActiveTab('site_opportunities')} className={`pb-4 px-2 text-sm font-bold border-b-2 transition-colors ${activeTab === 'site_opportunities' ? 'border-indigo-600 text-indigo-600' : 'border-transparent text-slate-500 hover:text-slate-700'}`}>Site Opportunities <span className="bg-amber-100 text-amber-800 px-1.5 py-0.5 rounded text-[10px] ml-1">{siteOpportunities.length}</span></button>
+            <button onClick={() => setActiveTab('active_sites')} className={`pb-4 px-2 text-sm font-bold border-b-2 transition-colors ${activeTab === 'active_sites' ? 'border-indigo-600 text-indigo-600' : 'border-transparent text-slate-500 hover:text-slate-700'}`}>Active Sites</button>
         </div>
 
-        {activeTab === 'claimed' && (
+        {/* TAB 1: LEAD FEED (HIGH DENSITY OPS VIEW) */}
+        {activeTab === 'lead_feed' && (
+            <div className="bg-white rounded-xl border border-slate-200 overflow-hidden shadow-sm">
+                <div className="p-6 border-b border-slate-200 bg-slate-50 flex justify-between items-center">
+                    <h3 className="font-bold text-slate-900 flex items-center gap-2"><Mail className="h-5 w-5 text-indigo-600" /> Outreach Queue</h3>
+                    <div className="flex items-center gap-4">
+                        <span className="text-xs font-bold text-slate-500 bg-white border border-slate-200 px-3 py-1 rounded-full">{leads.filter(l => !l.is_claimed).length} Pending</span>
+                    </div>
+                </div>
+                <div className="divide-y divide-slate-100">
+                    {leads.filter(l => !l.is_claimed).map(lead => {
+                        const tier = calculateTier(lead, lead.trial_questions);
+                        const TierIcon = tier?.icon || HelpCircle;
+                        const strategy = getContactStrategy(lead);
+                        
+                        return (
+                            <div key={lead.id} className="p-5 hover:bg-slate-50 transition-colors flex flex-col md:flex-row gap-6 group relative">
+                                
+                                {/* COL 1: PATIENT & TRIAL (30%) */}
+                                <div className="w-full md:w-[30%] space-y-3">
+                                    <div>
+                                        <div className="flex items-center gap-2 mb-1">
+                                            <h4 className="font-bold text-slate-900 text-sm cursor-pointer hover:text-indigo-600 transition-colors" onClick={() => { setSelectedLead(lead); setNoteText(lead.admin_notes || ""); }}>{lead.name}</h4>
+                                            {/* RESTORED DETAIL NEXT TO BADGE */}
+                                            {tier && (
+                                                <div className="flex items-center gap-1.5">
+                                                    <span className={`text-[9px] font-bold uppercase tracking-wide px-1.5 py-0.5 rounded border ${tier.style}`}>{tier.label}</span>
+                                                    <span className="text-[10px] text-slate-400 italic">{tier.detail}</span>
+                                                </div>
+                                            )}
+                                        </div>
+                                        <div className="text-xs text-slate-500 flex items-center gap-2">
+                                            <span className="font-medium text-slate-700">{lead.trial_title}</span>
+                                        </div>
+                                    </div>
+                                    <div className="flex items-center gap-2 px-2 py-1 bg-slate-100 w-fit rounded border border-slate-200">
+                                        <MapPin className="h-3 w-3 text-slate-400" />
+                                        <span className="text-xs font-bold text-slate-600">{lead.site_city}, {lead.site_state}</span>
+                                    </div>
+                                    <button onClick={() => { setSelectedLead(lead); setNoteText(lead.admin_notes || ""); }} className="text-xs font-bold text-indigo-600 hover:text-indigo-800 flex items-center gap-1">
+                                        View Application <ChevronRight className="h-3 w-3" />
+                                    </button>
+                                </div>
+
+                                {/* COL 2: CONTACT DOSSIER (35%) */}
+                                <div className="w-full md:w-[35%] bg-slate-50/50 rounded-lg border border-slate-200 p-3">
+                                    <h5 className="text-[10px] font-bold text-slate-400 uppercase mb-2 tracking-wide flex items-center gap-1"><Building2 className="h-3 w-3" /> Site Contact Data</h5>
+                                    
+                                    {/* Facility Name */}
+                                    {strategy.facility && (
+                                        <div className="mb-2">
+                                            <div className="text-xs font-bold text-slate-800">{strategy.facility}</div>
+                                            {strategy.fullAddress && <div className="text-[10px] text-slate-500">{strategy.fullAddress}</div>}
+                                        </div>
+                                    )}
+
+                                    {/* Local Contacts Loop */}
+                                    {strategy.localContacts.length > 0 ? (
+                                        <div className="space-y-2 mb-2">
+                                            {strategy.localContacts.map((contact: any, i: number) => (
+                                                <div key={i} className="flex justify-between items-start text-xs border-l-2 border-indigo-300 pl-2">
+                                                    <div className="w-full">
+                                                        <div className="font-bold text-slate-700">{contact.name || "Unknown Name"}</div>
+                                                        {contact.phone && <div className="text-[10px] text-slate-500 font-mono flex items-center gap-1 mt-0.5"><Phone className="h-3 w-3 text-indigo-400"/> {contact.phone}</div>}
+                                                        {contact.email && <div className="text-[10px] text-slate-500 font-mono flex items-center gap-1 mt-0.5"><Mail className="h-3 w-3 text-indigo-400"/> {contact.email}</div>}
+                                                        {!contact.phone && !contact.email && <div className="text-[10px] text-slate-400 italic">No direct info</div>}
+                                                    </div>
+                                                    {contact.email && (
+                                                        <button onClick={() => generateEmailDraft(lead, contact)} className="p-1 hover:bg-indigo-100 rounded text-indigo-600" title="Copy Email">
+                                                            <Copy className="h-3 w-3" />
+                                                        </button>
+                                                    )}
+                                                </div>
+                                            ))}
+                                        </div>
+                                    ) : (
+                                        <div className="text-xs text-slate-400 italic mb-2">No direct contacts found.</div>
+                                    )}
+
+                                    {/* Central Fallback */}
+                                    {strategy.central && (
+                                        <div className="pt-2 border-t border-slate-100">
+                                            <div className="text-[9px] font-bold text-slate-400 uppercase">Backup:</div>
+                                            <div className="text-xs text-slate-600 font-bold">{strategy.central.name}</div>
+                                            <div className="text-[10px] text-slate-500 font-mono">{strategy.central.phone}</div>
+                                            <div className="text-[10px] text-slate-500 font-mono">{strategy.central.email}</div>
+                                        </div>
+                                    )}
+                                </div>
+
+                                {/* COL 3: OPS & NOTES (35%) */}
+                                <div className="w-full md:w-[35%] flex flex-col h-full">
+                                    <div className="flex items-center justify-between mb-2">
+                                        <span className="text-[10px] font-bold text-slate-400 uppercase tracking-wide">Admin Log</span>
+                                        {savingNote === lead.id && <span className="text-[10px] text-indigo-600 animate-pulse font-bold">Saving...</span>}
+                                    </div>
+                                    <textarea 
+                                        defaultValue={lead.admin_notes || ""} 
+                                        onBlur={(e) => updateLeadNote(lead.id, e.target.value)}
+                                        className="flex-1 w-full bg-yellow-50 border border-yellow-200 rounded-lg p-2 text-xs text-slate-700 focus:ring-2 focus:ring-yellow-400 outline-none resize-none min-h-[80px]"
+                                        placeholder="Log outreach notes here..."
+                                    />
+                                    <div className="flex justify-end gap-2 mt-2">
+                                        <div className={`px-2 py-1 rounded text-[10px] font-bold uppercase border ${lead.admin_notes ? 'bg-indigo-50 text-indigo-700 border-indigo-100' : 'bg-slate-50 text-slate-500 border-slate-100'}`}>
+                                            {lead.admin_notes ? "In Progress" : "New Lead"}
+                                        </div>
+                                    </div>
+                                </div>
+                            </div>
+                        );
+                    })}
+                    {leads.filter(l => !l.is_claimed).length === 0 && <div className="p-10 text-center text-slate-400 italic">No pending leads.</div>}
+                </div>
+            </div>
+        )}
+
+        {/* TAB 2: SITE OPPORTUNITIES (NOW WITH CONTACTS & PERSISTENT NOTES) */}
+        {activeTab === 'site_opportunities' && (
+            <div className="bg-white rounded-xl border border-slate-200 overflow-hidden shadow-sm">
+                <div className="p-6 border-b border-slate-200 bg-amber-50 flex justify-between items-center">
+                    <h3 className="font-bold text-amber-900 flex items-center gap-2"><Activity className="h-5 w-5" /> Sales Targets</h3>
+                    <div className="flex items-center gap-4">
+                        <span className="text-xs font-bold text-amber-800 bg-amber-100 px-3 py-1 rounded-full">{siteOpportunities.length} Unclaimed Sites</span>
+                    </div>
+                </div>
+                <div className="divide-y divide-slate-100">
+                    {siteOpportunities.map((opp) => {
+                        const representativeLead = opp.leads[0];
+                        const strategy = getContactStrategy(representativeLead);
+                        
+                        return (
+                            <div key={opp.id} className="p-5 hover:bg-slate-50 transition-colors flex flex-col md:flex-row gap-6 group relative">
+                                
+                                {/* COL 1: SITE INFO & VALUE */}
+                                <div className="w-full md:w-[30%] space-y-3">
+                                    <div>
+                                        <div className="flex items-center gap-2 mb-1">
+                                            <h4 className="font-bold text-slate-900 text-sm">{opp.title}</h4>
+                                        </div>
+                                        <div className="text-xs text-slate-500 font-mono">{opp.nct_id}</div>
+                                    </div>
+                                    <div className="flex items-center gap-2 px-2 py-1 bg-slate-100 w-fit rounded border border-slate-200">
+                                        <MapPin className="h-3 w-3 text-slate-400" />
+                                        <span className="text-xs font-bold text-slate-600">{opp.city}, {opp.state}</span>
+                                    </div>
+                                    <div className="flex items-center gap-2 bg-emerald-50 w-fit px-3 py-1.5 rounded-lg border border-emerald-100">
+                                        <Users className="h-4 w-4 text-emerald-600" />
+                                        <span className="text-lg font-bold text-emerald-700">{opp.count} Leads Waiting</span>
+                                    </div>
+                                </div>
+
+                                {/* COL 2: CONTACT DOSSIER (Same as Lead Feed) */}
+                                <div className="w-full md:w-[35%] bg-slate-50/50 rounded-lg border border-slate-200 p-3">
+                                    <h5 className="text-[10px] font-bold text-slate-400 uppercase mb-2 tracking-wide flex items-center gap-1"><Building2 className="h-3 w-3" /> Target Contact</h5>
+                                    
+                                    {strategy.facility && (
+                                        <div className="mb-2">
+                                            <div className="text-xs font-bold text-slate-800">{strategy.facility}</div>
+                                            {strategy.fullAddress && <div className="text-[10px] text-slate-500">{strategy.fullAddress}</div>}
+                                        </div>
+                                    )}
+
+                                    {strategy.localContacts.length > 0 ? (
+                                        <div className="space-y-2 mb-2">
+                                            {strategy.localContacts.map((contact: any, i: number) => (
+                                                <div key={i} className="flex justify-between items-start text-xs border-l-2 border-indigo-300 pl-2">
+                                                    <div className="w-full">
+                                                        <div className="font-bold text-slate-700">{contact.name || "Unknown Name"}</div>
+                                                        {contact.phone && <div className="text-[10px] text-slate-500 font-mono flex items-center gap-1 mt-0.5"><Phone className="h-3 w-3 text-indigo-400"/> {contact.phone}</div>}
+                                                        {contact.email && <div className="text-[10px] text-slate-500 font-mono flex items-center gap-1 mt-0.5"><Mail className="h-3 w-3 text-indigo-400"/> {contact.email}</div>}
+                                                    </div>
+                                                </div>
+                                            ))}
+                                        </div>
+                                    ) : (
+                                        <div className="text-xs text-slate-400 italic mb-2">No direct contacts found.</div>
+                                    )}
+
+                                    {/* Central Fallback (NOW INCLUDED IN SITE OPPS) */}
+                                    {strategy.central && (
+                                        <div className="pt-2 border-t border-slate-100">
+                                            <div className="text-[9px] font-bold text-slate-400 uppercase">Backup:</div>
+                                            <div className="text-xs text-slate-600 font-bold">{strategy.central.name}</div>
+                                            <div className="text-[10px] text-slate-500 font-mono">{strategy.central.phone}</div>
+                                            <div className="text-[10px] text-slate-500 font-mono">{strategy.central.email}</div>
+                                        </div>
+                                    )}
+                                </div>
+
+                                {/* COL 3: ACTIONS & PERSISTENT LOG */}
+                                <div className="w-full md:w-[35%] flex flex-col h-full justify-between">
+                                    <div className="flex flex-col gap-2">
+                                        <div className="flex items-center justify-between mb-1">
+                                            <span className="text-[10px] font-bold text-slate-400 uppercase tracking-wide">Site Outreach Log</span>
+                                            {savingSiteNote === opp.id && <span className="text-[10px] text-indigo-600 animate-pulse font-bold">Saving...</span>}
+                                        </div>
+                                        <textarea 
+                                            defaultValue={opp.admin_note || ""} 
+                                            onBlur={(e) => updateSiteNote(opp.id, opp.nct_id, opp.city, opp.state, e.target.value)}
+                                            className="w-full bg-yellow-50 border border-yellow-200 rounded-lg p-2 text-xs text-slate-700 focus:ring-2 focus:ring-yellow-400 outline-none resize-none min-h-[60px]"
+                                            placeholder="Log notes about this site..."
+                                        />
+                                    </div>
+                                    <button onClick={() => enterGodMode({ ...opp, id: 'virtual' })} className="w-full flex items-center justify-center gap-1.5 text-xs font-bold text-white bg-indigo-600 px-3 py-2.5 rounded-lg hover:bg-indigo-700 transition-all shadow-sm">
+                                        <Eye className="h-3 w-3" /> Manage All {opp.count} Leads
+                                    </button>
+                                </div>
+                            </div>
+                        );
+                    })}
+                    {siteOpportunities.length === 0 && <div className="p-10 text-center text-slate-400 italic">No unclaimed opportunities.</div>}
+                </div>
+            </div>
+        )}
+
+        {/* TAB 3: ACTIVE SITES */}
+        {activeTab === 'active_sites' && (
             <div className="bg-white rounded-2xl shadow-sm border border-slate-200 overflow-hidden">
                 <div className="overflow-x-auto"><table className="w-full text-left text-sm"><thead className="bg-slate-50 border-b border-slate-200 text-slate-500 font-bold uppercase text-xs"><tr><th className="px-6 py-4">Trial Info</th><th className="px-6 py-4">Researcher</th><th className="px-6 py-4">Status Breakdown</th><th className="px-6 py-4">Total</th><th className="px-6 py-4">Actions</th></tr></thead><tbody className="divide-y divide-slate-100">
-                    {claimedTrials.map((claim) => (
+                    {activeSites.map((claim) => (
                         <tr key={claim.id} className="hover:bg-slate-50/50 transition-colors">
                             <td className="px-6 py-4"><div className="font-bold text-slate-900">{claim.trials?.title}</div><div className="text-xs text-slate-500 font-mono mt-1">{claim.nct_id} • {claim.site_location?.city}, {claim.site_location?.state}</div></td>
-                            <td className="px-6 py-4"><div className="font-bold text-slate-700">{claim.researcher_profiles?.company_name}</div><div className="text-xs text-slate-500">{claim.researcher_profiles?.full_name}</div><a href={`mailto:${claim.researcher_profiles?.email}`} className="text-xs text-indigo-500 hover:underline">{claim.researcher_profiles?.email}</a></td>
-                            {/* NEW BREAKDOWN COLUMN */}
+                            <td className="px-6 py-4"><div className="font-bold text-slate-700">{claim.researcher_profiles?.company_name}</div><div className="text-xs text-slate-500">{claim.researcher_profiles?.full_name}</div></td>
                             <td className="px-6 py-4">
                                 <div className="flex items-center gap-3 text-[10px] font-bold uppercase tracking-wide">
                                     <div className="flex flex-col items-center"><span className="bg-blue-100 text-blue-700 px-2 py-0.5 rounded-md mb-1">{claim.stats.new}</span><span className="text-slate-400">New</span></div>
@@ -238,91 +570,180 @@ export default function AdminDashboard() {
                             <td className="px-6 py-4"><button onClick={() => enterGodMode(claim)} className="flex items-center gap-1.5 text-xs font-bold text-slate-500 border border-slate-200 px-3 py-1.5 rounded-lg hover:bg-white hover:border-indigo-200 hover:text-indigo-600 transition-all"><Eye className="h-3 w-3" /> God Mode</button></td>
                         </tr>
                     ))}
-                    {claimedTrials.length === 0 && <tr><td colSpan={5} className="p-8 text-center text-slate-400 italic">No claimed trials yet.</td></tr>}
+                    {activeSites.length === 0 && <tr><td colSpan={5} className="p-8 text-center text-slate-400 italic">No claimed trials yet.</td></tr>}
                 </tbody></table></div>
-            </div>
-        )}
-
-        {/* ... UNCLAIMED & LEADS TABS (UNCHANGED) ... */}
-        {activeTab === 'unclaimed' && (
-            <div className="bg-white rounded-2xl shadow-sm border border-slate-200 overflow-hidden">
-                <div className="p-6 border-b border-slate-200 bg-amber-50/50"><h3 className="font-bold text-amber-900 flex items-center gap-2"><Activity className="h-5 w-5" /> High-Value Opportunities</h3><p className="text-xs text-amber-700 mt-1">These sites have active patient demand but no researcher attached. Call them!</p></div>
-                <div className="overflow-x-auto"><table className="w-full text-left text-sm"><thead className="bg-slate-50 border-b border-slate-200 text-slate-500 font-bold uppercase text-xs"><tr><th className="px-6 py-4">Priority</th><th className="px-6 py-4">Trial Site</th><th className="px-6 py-4">Honey Pot</th><th className="px-6 py-4 text-right">Actions</th></tr></thead><tbody className="divide-y divide-slate-100">
-                    {unclaimedOpportunities.map((opp) => (
-                        <tr key={opp.id} className="hover:bg-slate-50/50 transition-colors">
-                            <td className="px-6 py-4">{opp.count > 5 ? <span className="bg-red-100 text-red-700 text-[10px] font-bold px-2 py-1 rounded uppercase tracking-wide">Hot</span> : <span className="bg-slate-100 text-slate-500 text-[10px] font-bold px-2 py-1 rounded uppercase tracking-wide">Warm</span>}</td>
-                            <td className="px-6 py-4"><div className="font-bold text-slate-900">{opp.title}</div><div className="text-xs text-slate-500 font-mono mt-1">{opp.nct_id}</div><div className="text-xs font-bold text-indigo-600 mt-1 flex items-center gap-1"><MapPin className="h-3 w-3" /> {opp.city}, {opp.state}</div></td>
-                            <td className="px-6 py-4"><div className="flex items-center gap-2 bg-emerald-50 w-fit px-3 py-1.5 rounded-lg border border-emerald-100"><Users className="h-4 w-4 text-emerald-600" /><span className="text-lg font-bold text-emerald-700">{opp.count}</span><span className="text-[10px] font-bold text-emerald-500 uppercase">Patients Waiting</span></div></td>
-                            <td className="px-6 py-4 text-right"><div className="flex justify-end gap-2"><button className="flex items-center gap-1.5 text-xs font-bold text-white bg-indigo-600 px-4 py-2 rounded-lg hover:bg-indigo-700 shadow-sm transition-all"><Phone className="h-3 w-3" /> Call Site</button><button onClick={() => markTrialClosed(opp)} className="flex items-center gap-1.5 text-xs font-bold text-red-600 bg-red-50 border border-red-100 px-3 py-2 rounded-lg hover:bg-red-100 transition-all" title="Mark as Unresponsive"><Ban className="h-3 w-3" /> Close</button></div></td>
-                        </tr>
-                    ))}
-                    {unclaimedOpportunities.length === 0 && <tr><td colSpan={4} className="p-8 text-center text-slate-400 italic">No unclaimed opportunities.</td></tr>}
-                </tbody></table></div>
-            </div>
-        )}
-
-        {activeTab === 'leads' && (
-            <div className="space-y-6">
-                {filterNctId && (
-                    <div className="bg-indigo-900 text-white p-4 rounded-xl shadow-lg flex items-center justify-between mb-6 animate-in slide-in-from-top-2">
-                        <div className="flex items-center gap-3">
-                            <Filter className="h-5 w-5 text-indigo-300" />
-                            <div>
-                                <div className="text-xs font-bold text-indigo-300 uppercase tracking-wide">Active Filter</div>
-                                <div className="font-bold text-sm">Showing candidates for <span className="font-mono bg-indigo-800 px-2 py-0.5 rounded">{filterNctId}</span></div>
-                            </div>
-                        </div>
-                        <button onClick={clearFilter} className="bg-white text-indigo-900 text-xs font-bold px-4 py-2 rounded-lg hover:bg-indigo-50 transition-colors">Clear Filter</button>
-                    </div>
-                )}
-
-                <PipelineSection title="To Review" count={leadsToReview.length} color="indigo" isOpen={expandedSections.includes('review')} onToggle={() => toggleSection('review')}>
-                    {leadsToReview.map(lead => <LeadCard key={lead.id} lead={lead} onClick={() => { setSelectedLead(lead); setNoteText(lead.admin_notes || ""); }} onDelete={deleteLead} onInvite={() => sendInviteEmail(lead)} />)}
-                    {leadsToReview.length === 0 && <div className="text-center py-8 text-slate-400 italic">No new leads.</div>}
-                </PipelineSection>
-                <PipelineSection title="Pending Info" count={leadsPending.length} color="amber" isOpen={expandedSections.includes('pending')} onToggle={() => toggleSection('pending')}>{leadsPending.map(lead => <LeadCard key={lead.id} lead={lead} onClick={() => { setSelectedLead(lead); setNoteText(lead.admin_notes || ""); }} onDelete={deleteLead} onInvite={() => sendInviteEmail(lead)} />)}</PipelineSection>
-                <PipelineSection title="Sent to Site" count={leadsSent.length} color="blue" isOpen={expandedSections.includes('sent')} onToggle={() => toggleSection('sent')}>{leadsSent.map(lead => <LeadCard key={lead.id} lead={lead} onClick={() => { setSelectedLead(lead); setNoteText(lead.admin_notes || ""); }} onDelete={deleteLead} onInvite={() => sendInviteEmail(lead)} />)}</PipelineSection>
-                <PipelineSection title="Referred / Completed" count={leadsReferred.length} color="emerald" isOpen={expandedSections.includes('referred')} onToggle={() => toggleSection('referred')}>{leadsReferred.map(lead => <LeadCard key={lead.id} lead={lead} onClick={() => { setSelectedLead(lead); setNoteText(lead.admin_notes || ""); }} onDelete={deleteLead} onInvite={() => sendInviteEmail(lead)} />)}</PipelineSection>
-                <div className="pt-4 border-t border-slate-200"><button onClick={() => toggleSection('rejected')} className="flex items-center gap-2 text-slate-400 font-bold text-sm hover:text-slate-600">{expandedSections.includes('rejected') ? <ChevronDown className="h-4 w-4" /> : <ChevronRight className="h-4 w-4" />} View Rejected ({leadsRejected.length})</button>{expandedSections.includes('rejected') && <div className="mt-4 opacity-75">{leadsRejected.map(lead => <LeadCard key={lead.id} lead={lead} onClick={() => { setSelectedLead(lead); setNoteText(lead.admin_notes || ""); }} onDelete={deleteLead} onInvite={() => sendInviteEmail(lead)} />)}</div>}</div>
             </div>
         )}
       </main>
 
-      {/* --- LEAD DETAIL MODAL (UNCHANGED) --- */}
+      {/* --- LEAD DETAIL DRAWER (Still available if they click "View Application") --- */}
       {selectedLead && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 animate-in fade-in duration-200">
-          <div className="absolute inset-0 bg-slate-900/60 backdrop-blur-sm" onClick={() => setSelectedLead(null)}></div>
-          <div className="relative bg-white rounded-2xl shadow-2xl w-full max-w-7xl max-h-[90vh] overflow-hidden flex flex-col">
-            <div className="p-6 border-b border-slate-100 bg-slate-50 flex justify-between items-start">
-              <div><h3 className="text-xl font-bold text-slate-900 flex items-center gap-3">Review Candidate</h3>
-                <div className="flex flex-wrap gap-4 mt-2 mb-2 text-sm text-slate-600">
-                   <div className="flex items-center gap-2 bg-slate-100/50 px-2 py-1 rounded border border-slate-200 font-bold text-slate-800"><User className="h-3.5 w-3.5 text-indigo-500" />{selectedLead.name}</div>
-                   <div className="flex items-center gap-2 bg-slate-100/50 px-2 py-1 rounded border border-slate-200"><Mail className="h-3.5 w-3.5 text-indigo-500" />{selectedLead.email}</div>
-                   <div className="flex items-center gap-2 bg-slate-100/50 px-2 py-1 rounded border border-slate-200"><Phone className="h-3.5 w-3.5 text-indigo-500" />{selectedLead.phone || "No Phone"}</div>
-                   <div className="flex items-center gap-2 bg-slate-100/50 px-2 py-1 rounded border border-slate-200 text-indigo-700 font-bold"><MapPin className="h-3.5 w-3.5" />{selectedLead.site_city}, {selectedLead.site_state}</div>
+        <div className="fixed inset-0 z-50 flex items-center justify-end animate-in fade-in duration-200">
+          <div className="absolute inset-0 bg-slate-900/50 backdrop-blur-sm" onClick={() => setSelectedLead(null)}></div>
+          <div className="relative h-full w-full max-w-5xl bg-white shadow-2xl flex flex-col animate-in slide-in-from-right duration-300">
+            {/* Header */}
+            <div className="h-16 border-b border-slate-200 flex items-center justify-between px-6 bg-slate-50 shrink-0">
+                <div className="flex items-center gap-4">
+                    <div className="w-10 h-10 bg-indigo-600 rounded-full flex items-center justify-center text-white font-bold">{selectedLead.name.charAt(0)}</div>
+                    <div>
+                        <h2 className="font-bold text-slate-900 text-lg leading-tight">{selectedLead.name}</h2>
+                        <div className="flex items-center gap-2 text-xs text-slate-500">
+                            <span className="font-mono text-slate-400">{selectedLead.trial_id}</span>
+                            <span className="text-slate-300">|</span>
+                            <MapPin className="h-3 w-3" /> {selectedLead.site_city}, {selectedLead.site_state}
+                        </div>
+                    </div>
                 </div>
-                <div className="flex items-center gap-2 mt-2"><span className="text-xs text-slate-400 uppercase font-bold tracking-wide">Current Stage:</span><select value={selectedLead.status} onChange={(e) => updateLeadStatus(selectedLead.id, e.target.value)} className="text-xs font-bold text-slate-700 bg-white border border-slate-300 rounded px-2 py-1 outline-none cursor-pointer"><option value="Strong Lead">New - Strong Lead</option><option value="Unlikely - Review Needed">New - Needs Review</option><option value="Pending">Pending Info</option><option value="Sent to Site">Sent to Site</option><option value="Referred">Referred (Success)</option><option value="Rejected">Rejected</option></select></div>
-              </div>
-              <button onClick={() => setSelectedLead(null)} className="text-slate-400 hover:text-slate-600"><XCircle className="h-6 w-6" /></button>
+                <button onClick={() => setSelectedLead(null)} className="p-2 hover:bg-slate-200 rounded-full text-slate-400 transition-colors"><X className="h-6 w-6" /></button>
             </div>
-            <div className="flex-1 overflow-hidden flex flex-col lg:flex-row">
-              <div className="w-full lg:w-1/4 bg-yellow-50/30 border-r border-slate-100 flex flex-col">
-                <div className="p-4 border-b border-yellow-100/50"><h4 className="text-xs font-bold uppercase text-amber-600 mb-1 flex items-center gap-2"><Lock className="h-3 w-3" /> Admin Private Notes</h4>{savingNote && <span className="text-[10px] text-amber-500 animate-pulse">Saving...</span>}</div>
-                <textarea className="flex-1 w-full p-4 bg-transparent border-none outline-none resize-none text-sm text-slate-700" placeholder="Notes log here..." value={noteText} onChange={(e) => setNoteText(e.target.value)} onBlur={saveNoteManual} />
-                {selectedLead.is_claimed && (<div className="p-4 border-t border-slate-100 bg-indigo-50/50"><h4 className="text-xs font-bold uppercase text-indigo-500 mb-1 flex items-center gap-2"><Eye className="h-3 w-3" /> Researcher Notes</h4><p className="text-xs text-indigo-900 italic">{selectedLead.researcher_notes || "No notes from site yet."}</p></div>)}
-              </div>
-              <div className="w-full lg:w-[37.5%] p-6 overflow-y-auto border-r border-slate-100">
-                <h4 className="text-xs font-bold uppercase text-indigo-500 mb-4 flex items-center gap-2"><CheckCircle2 className="h-4 w-4" /> Patient Answers</h4>
-                <div className="space-y-4">{selectedLead.trial_questions?.map((q: any, index: number) => { const userAnswer = selectedLead.answers ? selectedLead.answers[index] : "N/A"; const isCorrect = userAnswer?.toLowerCase() === q.correct_answer?.toLowerCase(); return (<div key={index} className={`p-4 rounded-xl border ${isCorrect ? 'bg-emerald-50/50 border-emerald-100' : 'bg-red-50/50 border-red-100'}`}><p className="text-sm font-bold text-slate-800 mb-2">{index + 1}. {q.question}</p><div className="flex items-center gap-3 text-sm"><span className={`px-2.5 py-1 rounded font-bold border flex items-center gap-1.5 ${isCorrect ? 'bg-emerald-100 text-emerald-800 border-emerald-200' : 'bg-red-100 text-red-800 border-red-200'}`}>{isCorrect ? <CheckCircle2 className="h-3 w-3" /> : <XCircle className="h-3 w-3" />} Answered: {userAnswer}</span>{!isCorrect && <span className="text-xs text-slate-500 bg-white px-2 py-1 rounded border border-slate-200">Wanted: {q.correct_answer}</span>}</div></div>); })}</div>
-              </div>
-              <div className="w-full lg:w-[37.5%] p-6 overflow-y-auto bg-slate-50/50">
-                <h4 className="text-xs font-bold uppercase text-slate-500 mb-4 flex items-center gap-2"><FileText className="h-4 w-4" /> Reference Criteria</h4>
-                <div className="bg-white p-4 rounded-xl border border-slate-200 shadow-sm"><pre className="whitespace-pre-wrap font-sans text-xs text-slate-600 leading-relaxed">{selectedLead.trial_criteria}</pre></div>
-              </div>
-            </div>
-            <div className="p-4 border-t border-slate-100 bg-white shrink-0 grid grid-cols-1 md:grid-cols-4 gap-4">
-               <div className="flex flex-col gap-2 p-3 bg-red-50/50 rounded-xl border border-red-100"><span className="text-[10px] font-bold uppercase text-red-400 tracking-wider">Rejection</span><button onClick={() => updateLeadStatus(selectedLead.id, 'Rejected')} className="w-full py-2 bg-red-600 text-white font-bold rounded-lg hover:bg-red-700 text-center text-xs shadow-sm">Move to Rejected</button></div>
-               <div className="flex flex-col gap-2 justify-end"><button onClick={() => setSelectedLead(null)} className="w-full py-2 bg-slate-800 text-white font-bold rounded-lg hover:bg-slate-900 text-center text-xs">Close</button></div>
+
+            <div className="flex-1 flex overflow-hidden">
+                <div className="w-[55%] border-r border-slate-200 overflow-y-auto p-8 bg-white">
+                    <div className="flex items-center justify-between mb-6">
+                        <h3 className="text-xs font-bold text-slate-400 uppercase tracking-wider flex items-center gap-2"><FileText className="h-4 w-4" /> Application Data</h3>
+                        {(() => {
+                            const tier = calculateTier(selectedLead, selectedLead.trial_questions);
+                            return tier ? (
+                                <div className="flex items-center gap-2">
+                                    <span className={`text-[10px] font-bold px-2 py-1 rounded uppercase border ${tier.style}`}>{tier.label}</span>
+                                    <span className="text-[10px] text-slate-400 italic">{tier.detail}</span>
+                                </div>
+                            ) : null;
+                        })()}
+                    </div>
+                    
+                    <div className="space-y-4 mb-8">
+                        {selectedLead.trial_questions?.map((q: any, i: number) => {
+                            const ans = selectedLead.answers ? selectedLead.answers[i] : "N/A";
+                            const isUnsure = ans?.toLowerCase().includes("know") || ans?.toLowerCase().includes("unsure");
+                            return (
+                                <div key={i} className={`p-4 rounded-xl border transition-all ${isUnsure ? 'bg-amber-50 border-amber-200 shadow-sm' : 'bg-slate-50 border-slate-100'}`}>
+                                    <p className="text-sm font-bold text-slate-800 mb-2 leading-snug">{q.question}</p>
+                                    <div className="flex items-center justify-between">
+                                        <span className={`text-xs font-bold px-2.5 py-1 rounded-md ${isUnsure ? 'bg-white text-amber-700 border border-amber-100' : 'bg-white border border-slate-200 text-slate-700'}`}>{ans}</span>
+                                    </div>
+                                </div>
+                            );
+                        })}
+                    </div>
+
+                    <div className="p-4 bg-slate-50 rounded-xl border border-slate-200">
+                        <h4 className="text-xs font-bold text-slate-500 mb-3 uppercase tracking-wide">Contact Details</h4>
+                        <div className="grid grid-cols-2 gap-4">
+                            <div className="flex items-center gap-3"><Mail className="h-4 w-4 text-slate-400" /><span className="text-sm text-slate-700 font-medium">{selectedLead.email}</span></div>
+                            <div className="flex items-center gap-3"><Phone className="h-4 w-4 text-slate-400" /><span className="text-sm text-slate-700 font-medium">{selectedLead.phone}</span></div>
+                        </div>
+                    </div>
+                </div>
+
+                {/* RIGHT COLUMN: THE OUTREACH CENTER */}
+                <div className="w-[45%] overflow-y-auto p-8 bg-slate-50/50">
+                    <div className="mb-8">
+                        <h3 className="text-xs font-bold text-indigo-600 uppercase tracking-wider mb-4 flex items-center gap-2"><Building2 className="h-4 w-4" /> Outreach Targets</h3>
+                        {(() => {
+                            const strategy = getContactStrategy(selectedLead);
+                            
+                            // MERGED FACILITY + LOCAL CONTACTS
+                            if (strategy.facility || strategy.localContacts.length > 0) {
+                                return (
+                                    <div className="space-y-4">
+                                        {/* Primary Facility Card */}
+                                        <div className="bg-white p-5 rounded-xl border-l-4 border-emerald-500 shadow-sm relative">
+                                            <div className="absolute top-2 right-2 text-[9px] font-bold text-emerald-600 uppercase bg-emerald-50 px-2 py-0.5 rounded">Local Site</div>
+                                            
+                                            {/* Facility Header */}
+                                            <div className="mb-4 pb-4 border-b border-slate-100">
+                                                <h4 className="font-bold text-slate-900 text-sm mb-1">{strategy.facility || "Facility Name Not Listed"}</h4>
+                                                {strategy.fullAddress && (
+                                                    <div className="flex items-center gap-1.5 text-xs text-slate-500">
+                                                        <MapPin className="h-3 w-3 text-slate-400" /> {strategy.fullAddress}
+                                                    </div>
+                                                )}
+                                            </div>
+
+                                            {/* People List */}
+                                            {strategy.localContacts.length > 0 ? (
+                                                <div className="space-y-3">
+                                                    {strategy.localContacts.map((contact: any, i: number) => (
+                                                        <div key={i} className="flex justify-between items-start bg-slate-50 p-3 rounded-lg border border-slate-100">
+                                                            <div>
+                                                                <div className="text-[10px] text-slate-400 font-bold uppercase">{contact.role || "Contact"}</div>
+                                                                <div className="text-sm font-bold text-slate-700">{contact.name || "Unknown Name"}</div>
+                                                                <div className="text-xs text-slate-500 mt-1 font-mono">{contact.phone || contact.email || "No direct info"}</div>
+                                                            </div>
+                                                            {contact.email && (
+                                                                <button onClick={() => generateEmailDraft(selectedLead, contact)} className="p-1.5 bg-white text-indigo-600 border border-slate-200 rounded hover:bg-indigo-50 transition-colors" title="Copy Email">
+                                                                    <Copy className="h-3 w-3" />
+                                                                </button>
+                                                            )}
+                                                        </div>
+                                                    ))}
+                                                </div>
+                                            ) : (
+                                                <div className="text-center py-2">
+                                                    <div className="text-xs text-slate-400 italic mb-3">No specific contacts listed.</div>
+                                                    <a 
+                                                        href={`https://www.google.com/search?q=${encodeURIComponent(strategy.facility + ' ' + selectedLead.site_city + ' ' + selectedLead.site_state + ' phone number')}`} 
+                                                        target="_blank" 
+                                                        className="flex items-center justify-center gap-2 w-full py-2 bg-slate-50 border border-slate-200 rounded-lg text-xs font-bold text-slate-600 hover:bg-white hover:text-blue-600 hover:border-blue-200 transition-all"
+                                                    >
+                                                        <Globe className="h-3 w-3" /> Find {strategy.facility} on Google
+                                                    </a>
+                                                </div>
+                                            )}
+                                        </div>
+
+                                        {/* Central Backup (Only show if it exists) */}
+                                        {strategy.central && (
+                                            <div className="bg-slate-100 p-4 rounded-xl border border-slate-200/60 relative opacity-80 hover:opacity-100 transition-opacity">
+                                                <div className="text-[10px] font-bold text-slate-400 uppercase mb-2">Backup: Central Hotline</div>
+                                                <div className="text-sm font-bold text-slate-700">{strategy.central.name}</div>
+                                                <div className="grid grid-cols-1 gap-1 text-xs mt-2 font-mono text-slate-500">
+                                                    <div>{strategy.central.phone}</div>
+                                                    <div>{strategy.central.email}</div>
+                                                </div>
+                                            </div>
+                                        )}
+                                    </div>
+                                );
+                            }
+
+                            // FALLBACK: Central Only
+                            if (strategy.central) {
+                                return (
+                                    <div className="bg-white p-5 rounded-xl border-l-4 border-blue-500 shadow-sm relative">
+                                        <div className="absolute top-2 right-2 text-[9px] font-bold text-blue-600 uppercase bg-blue-50 px-2 py-0.5 rounded">Central Only</div>
+                                        <h4 className="font-bold text-slate-900 text-sm mb-2">{strategy.central.name}</h4>
+                                        <div className="text-xs text-slate-500 mb-4">No local site contact found. Call central recruitment.</div>
+                                        <div className="space-y-2 text-xs font-mono text-slate-600">
+                                            {strategy.central.phone && <div className="flex items-center gap-2"><Phone className="h-3 w-3" /> {strategy.central.phone}</div>}
+                                            {strategy.central.email && <div className="flex items-center gap-2"><Mail className="h-3 w-3" /> {strategy.central.email}</div>}
+                                        </div>
+                                    </div>
+                                );
+                            }
+
+                            return <div className="text-xs text-slate-400 italic">No contact info found for this site.</div>;
+                        })()}
+                    </div>
+
+                    <div className="mb-8">
+                        <h3 className="text-xs font-bold text-slate-500 uppercase tracking-wider mb-3 flex items-center gap-2"><History className="h-4 w-4" /> Admin Outreach Log</h3>
+                        <div className="bg-white border border-slate-200 rounded-xl overflow-hidden flex flex-col h-48 shadow-sm focus-within:ring-2 focus-within:ring-indigo-500/20 transition-all">
+                            <textarea className="flex-1 w-full p-4 text-xs text-slate-700 outline-none resize-none bg-transparent leading-relaxed" placeholder="Log your calls, emails, or voicemail details here..." value={noteText} onChange={(e) => setNoteText(e.target.value)} onBlur={saveNoteManual} />
+                            <div className="bg-slate-50 px-4 py-2 border-t border-slate-100 flex justify-between items-center"><span className="text-[10px] text-slate-400 font-medium">{savingNote ? "Saving..." : "Auto-saves on blur"}</span></div>
+                        </div>
+                    </div>
+
+                    <div className="pt-6 border-t border-slate-200">
+                        <button onClick={() => { 
+                            setViewingClaim({ id: 'virtual', nct_id: selectedLead.trial_id, site_location: { city: selectedLead.site_city, state: selectedLead.site_state } }); 
+                            setSelectedLead(null); 
+                        }} className="w-full py-3 bg-white border border-slate-200 text-slate-700 font-bold rounded-xl text-sm hover:bg-slate-50 hover:text-indigo-600 hover:border-indigo-200 transition-all flex items-center justify-center gap-2 shadow-sm">
+                            <LayoutDashboard className="h-4 w-4" /> View Full Trial Pipeline
+                        </button>
+                    </div>
+                </div>
             </div>
           </div>
         </div>
@@ -331,7 +752,7 @@ export default function AdminDashboard() {
   );
 }
 
-// === GOD MODE COMPONENT (FULL RESEARCHER DASHBOARD REPLICA + REALTIME) ===
+// === GOD MODE COMPONENT (Complete) ===
 const GodModeView = ({ claim, onBack }: { claim: any, onBack: () => void }) => {
     const [leads, setLeads] = useState<any[]>([]);
     const [activeTab, setActiveTab] = useState<'leads' | 'profile' | 'media' | 'analytics'>('leads');
@@ -349,26 +770,48 @@ const GodModeView = ({ claim, onBack }: { claim: any, onBack: () => void }) => {
     const [photos, setPhotos] = useState(claim.facility_photos || []);
     
     const [searchTerm, setSearchTerm] = useState("");
+    const [tierFilter, setTierFilter] = useState<'all' | TierType>('all');
     const [messages, setMessages] = useState<any[]>([]);
     const [historyLogs, setHistoryLogs] = useState<any[]>([]);
     const [noteBuffer, setNoteBuffer] = useState("");
     const [messageInput, setMessageInput] = useState("");
     
-    const [isSaving, setIsSaving] = useState(false);
+    // Question Editing State
+    const [editingAnswerIndex, setEditingAnswerIndex] = useState<number | null>(null);
+    const [tempAnswer, setTempAnswer] = useState("");
     
-    // SCROLL REFS
+    const [isSaving, setIsSaving] = useState(false);
     const chatBottomRef = useRef<HTMLDivElement>(null);
+
+    // --- ANALYTICS CALCULATIONS ---
+    const analyticsData = useMemo(() => {
+        const totalLeads = leads.length;
+        const enrolled = leads.filter(l => l.site_status === 'Enrolled').length;
+        const notEligible = leads.filter(l => l.site_status === 'Not Eligible').length;
+        const scheduled = leads.filter(l => l.site_status === 'Scheduled').length;
+        const estimatedViews = Math.round(totalLeads * 18.5); 
+        const estimatedStarts = Math.round(totalLeads * 2.5);
+        const dropOffRate = estimatedStarts > 0 ? Math.round(((estimatedStarts - totalLeads) / estimatedStarts) * 100) : 0;
+        const conversionRate = estimatedViews > 0 ? ((enrolled / estimatedViews) * 100).toFixed(2) : "0.00";
+        const passRate = totalLeads > 0 ? Math.round(((totalLeads - notEligible) / totalLeads) * 100) : 0;
+        const failureCounts: Record<string, number> = {};
+        leads.forEach(lead => {
+            if (Array.isArray(lead.answers) && questions.length > 0) {
+                lead.answers.forEach((ans: string, index: number) => {
+                    if (questions[index] && ans !== questions[index].correct_answer) {
+                        const qText = questions[index].question;
+                        failureCounts[qText] = (failureCounts[qText] || 0) + 1;
+                    }
+                });
+            }
+        });
+        const topFailures = Object.entries(failureCounts).sort(([,a], [,b]) => b - a).slice(0, 4).map(([q, count]) => ({ question: q, count }));
+        return { totalLeads, enrolled, scheduled, notEligible, estimatedViews, estimatedStarts, dropOffRate, conversionRate, passRate, topFailures };
+    }, [leads, questions]);
 
     useEffect(() => {
         async function fetchGodLeads() {
-            const { data } = await supabase
-                .from('leads')
-                .select('*')
-                .eq('trial_id', claim.nct_id)
-                .eq('site_city', claim.site_location?.city)
-                .eq('site_state', claim.site_location?.state)
-                .order('created_at', { ascending: false });
-            
+            const { data } = await supabase.from('leads').select('*').eq('trial_id', claim.nct_id).eq('site_city', claim.site_location?.city).eq('site_state', claim.site_location?.state).order('created_at', { ascending: false });
             if (data) {
                 const leadIds = data.map(l => l.id);
                 let counts: any = {};
@@ -382,86 +825,23 @@ const GodModeView = ({ claim, onBack }: { claim: any, onBack: () => void }) => {
         fetchGodLeads();
     }, [claim]);
 
-    // === REALTIME LISTENERS (LEADS & MESSAGES) ===
+    // === REALTIME LISTENERS ===
     useEffect(() => {
-        // Listener 1: Messages (Chat)
-        const msgChannel = supabase
-            .channel('god-mode-messages')
-            .on('postgres_changes', { event: 'INSERT', schema: 'public', table: 'messages' }, (payload) => {
-                if (payload.new.sender_role === 'patient') {
-                    if (selectedLeadId !== payload.new.lead_id) {
-                        setLeads(prev => prev.map(l => l.id === payload.new.lead_id ? { ...l, unread_count: (l.unread_count || 0) + 1 } : l));
-                    } else {
-                        setMessages(prev => [...prev, payload.new]);
-                        // Mark as read immediately if Admin is viewing
-                        if (!isReadOnly) supabase.from('messages').update({ is_read: true }).eq('id', payload.new.id);
-                    }
+        const msgChannel = supabase.channel('god-mode-messages').on('postgres_changes', { event: 'INSERT', schema: 'public', table: 'messages' }, (payload) => {
+            if (payload.new.sender_role === 'patient') {
+                if (selectedLeadId !== payload.new.lead_id) {
+                    setLeads(prev => prev.map(l => l.id === payload.new.lead_id ? { ...l, unread_count: (l.unread_count || 0) + 1 } : l));
+                } else {
+                    setMessages(prev => [...prev, payload.new]);
+                    if (!isReadOnly) supabase.from('messages').update({ is_read: true }).eq('id', payload.new.id);
                 }
-            })
-            .subscribe();
-
-        // Listener 2: Leads (Status Changes)
-        const leadChannel = supabase
-            .channel('god-mode-leads')
-            .on('postgres_changes', { event: 'UPDATE', schema: 'public', table: 'leads' }, (payload) => {
-                // If a lead in our list is updated (e.g. status change by researcher), update local state
-                setLeads(prev => prev.map(l => l.id === payload.new.id ? { ...l, ...payload.new } : l));
-                // Update selected lead details if open
-                if (selectedLeadId === payload.new.id) {
-                    // Force refresh details? or just let state cascade
-                }
-            })
-            .on('postgres_changes', { event: 'INSERT', schema: 'public', table: 'leads' }, (payload) => {
-                // Check if this new lead belongs to this trial/site
-                if (payload.new.trial_id === claim.nct_id && payload.new.site_city === claim.site_location?.city) {
-                    setLeads(prev => [payload.new, ...prev]);
-                }
-            })
-            .subscribe();
-
-        return () => { 
-            supabase.removeChannel(msgChannel); 
-            supabase.removeChannel(leadChannel);
-        };
-    }, [selectedLeadId, claim, isReadOnly]);
-
-    const analyticsData = useMemo(() => {
-        const totalLeads = leads.length;
-        const enrolled = leads.filter(l => l.site_status === 'Enrolled').length;
-        const notEligible = leads.filter(l => l.site_status === 'Not Eligible').length;
-        const scheduled = leads.filter(l => l.site_status === 'Scheduled').length;
-        const contacting = leads.filter(l => l.site_status === 'Contacted').length;
-        const newLeads = leads.filter(l => l.site_status === 'New').length;
-        const passRate = totalLeads > 0 ? Math.round(((totalLeads - notEligible) / totalLeads) * 100) : 0;
-        
-        const dailyCounts = Array(14).fill(0);
-        const today = new Date();
-        const labels = Array(14).fill("").map((_, i) => { const d = new Date(); d.setDate(today.getDate() - (13 - i)); return d.toLocaleDateString('en-US', { weekday: 'narrow' }); });
-        leads.forEach(l => { const diffDays = Math.ceil(Math.abs(today.getTime() - new Date(l.created_at).getTime()) / (1000 * 60 * 60 * 24)); if (diffDays <= 14) dailyCounts[14 - diffDays]++; });
-        const maxDaily = Math.max(...dailyCounts, 5);
-        const recentLeadsCount = dailyCounts.slice(7).reduce((a, b) => a + b, 0);
-
-        // Simulation for Funnel Top (Since we don't have page view tracking yet)
-        const estimatedViews = Math.round(totalLeads * 18.5); 
-        const estimatedStarts = Math.round(totalLeads * 2.5);
-        const dropOffRate = estimatedStarts > 0 ? Math.round(((estimatedStarts - totalLeads) / estimatedStarts) * 100) : 0;
-        const conversionRate = estimatedViews > 0 ? ((enrolled / estimatedViews) * 100).toFixed(2) : "0.00";
-
-        const failureCounts: Record<string, number> = {};
-        leads.forEach(lead => {
-            if (Array.isArray(lead.answers) && questions.length > 0) {
-                lead.answers.forEach((ans: string, index: number) => {
-                    if (questions[index] && ans !== questions[index].correct_answer) {
-                        const qText = questions[index].question;
-                        failureCounts[qText] = (failureCounts[qText] || 0) + 1;
-                    }
-                });
             }
-        });
-        const topFailures = Object.entries(failureCounts).sort(([,a], [,b]) => b - a).slice(0, 4).map(([q, count]) => ({ question: q, count }));
-
-        return { totalLeads, enrolled, scheduled, contacting, newLeads, passRate, recentLeadsCount, topFailures, dailyCounts, labels, maxDaily, estimatedViews, estimatedStarts, dropOffRate, conversionRate };
-    }, [leads, questions]);
+        }).subscribe();
+        const leadChannel = supabase.channel('god-mode-leads').on('postgres_changes', { event: 'UPDATE', schema: 'public', table: 'leads' }, (payload) => {
+            setLeads(prev => prev.map(l => l.id === payload.new.id ? { ...l, ...payload.new } : l));
+        }).subscribe();
+        return () => { supabase.removeChannel(msgChannel); supabase.removeChannel(leadChannel); };
+    }, [selectedLeadId, claim, isReadOnly]);
 
     useEffect(() => {
         if (!selectedLeadId) return;
@@ -474,15 +854,42 @@ const GodModeView = ({ claim, onBack }: { claim: any, onBack: () => void }) => {
         loadDrawer();
     }, [selectedLeadId]);
 
-    // SCROLL LOGIC
-    useEffect(() => {
-        chatBottomRef.current?.scrollIntoView({ behavior: 'smooth' });
-    }, [messages, drawerTab]);
+    useEffect(() => { chatBottomRef.current?.scrollIntoView({ behavior: 'smooth' }); }, [messages, drawerTab]);
 
     const updateLeadStatus = async (leadId: string, newStatus: LeadStatus) => {
         if (isReadOnly) return;
         const { error } = await supabase.from('leads').update({ site_status: newStatus }).eq('id', leadId);
         if(!error) setLeads(prev => prev.map(l => l.id === leadId ? { ...l, site_status: newStatus } : l));
+    };
+
+    // --- FIX: ANSWER NORMALIZATION ---
+    const options = ["Yes", "No", "I don't know"];
+    const normalizeAnswer = (val: string) => {
+        if (!val) return "Yes"; 
+        const match = options.find(o => o.toLowerCase() === val.toLowerCase());
+        return match || "Yes"; 
+    };
+
+    const updateLeadAnswer = async (index: number, newAnswer: string) => {
+        if (!selectedLead || isReadOnly) return;
+        
+        const newAnswers = questions.map((_, i) => {
+            if (i === index) return newAnswer;
+            if (selectedLead.answers && selectedLead.answers[i] !== undefined) return selectedLead.answers[i];
+            return null; 
+        });
+
+        setLeads(prev => prev.map(l => l.id === selectedLead.id ? { ...l, answers: newAnswers } : l));
+        setEditingAnswerIndex(null);
+
+        const { error } = await supabase.from('leads').update({ answers: newAnswers }).eq('id', selectedLead.id);
+        
+        if (error) {
+            alert(`Save Failed: ${error.message}. Check Admin RLS Policies.`);
+            setLeads(prev => prev.map(l => l.id === selectedLead.id ? { ...l, answers: selectedLead.answers } : l));
+        } else {
+            await supabase.from('audit_logs').insert({ lead_id: selectedLead.id, action: "Data Correction (Admin)", detail: `Updated Q${index + 1} to "${newAnswer}"`, performed_by: 'Admin' });
+        }
     };
 
     const saveNote = async () => {
@@ -496,10 +903,10 @@ const GodModeView = ({ claim, onBack }: { claim: any, onBack: () => void }) => {
         const newMessage = { id: Date.now(), lead_id: selectedLeadId, content: messageInput, sender_role: 'researcher', created_at: new Date().toISOString(), is_read: false };
         setMessages(prev => [...prev, newMessage]); 
         setMessageInput("");
-        await supabase.from('messages').insert({ lead_id: selectedLeadId, content: messageInput, sender_role: 'researcher' });
+        const { error } = await supabase.from('messages').insert({ lead_id: selectedLeadId, content: messageInput, sender_role: 'researcher' });
+        if (error) alert("Message failed to send: " + error.message);
     };
 
-    // --- SAVE EDITS (PROFILE/MEDIA) ---
     const saveSettings = async () => {
         if (isReadOnly) return;
         setIsSaving(true);
@@ -510,27 +917,23 @@ const GodModeView = ({ claim, onBack }: { claim: any, onBack: () => void }) => {
             custom_faq: faqs, 
             facility_photos: photos 
         }).eq('id', claim.id);
-        
         if (error) alert("Error saving: " + error.message);
         else alert("Saved changes for researcher!");
         setIsSaving(false);
     };
 
-    // --- TRIGGER DELETE (Added to fix ReferenceError) ---
     const triggerDelete = async () => {
         if (!selectedLeadId || isReadOnly) return;
         if (!confirm("Are you sure you want to delete this lead permanently?")) return;
-        
         const { error } = await supabase.from('leads').delete().eq('id', selectedLeadId);
-        if (error) {
-            alert("Error deleting: " + error.message);
-        } else {
+        if (error) { alert("Error deleting: " + error.message); } 
+        else {
             setLeads(prev => prev.filter(l => l.id !== selectedLeadId));
             setSelectedLeadId(null);
         }
     };
 
-    // --- SUB-FUNCTIONS FOR EDITING (Only active when !isReadOnly) ---
+    // --- SUB-FUNCTIONS FOR EDITING ---
     const addQuestion = () => setQuestions([...questions, { question: "", correct_answer: "Yes" }]);
     const removeQuestion = (i: number) => { const n = [...questions]; n.splice(i, 1); setQuestions(n); };
     const updateQuestionText = (i: number, t: string) => { const n = [...questions]; n[i].question = t; setQuestions(n); };
@@ -540,15 +943,32 @@ const GodModeView = ({ claim, onBack }: { claim: any, onBack: () => void }) => {
     const updateFaq = (i: number, f: string, t: string) => { const n = [...faqs]; (n[i] as any)[f] = t; setFaqs(n); };
     const removePhoto = (url: string) => setPhotos(photos.filter(p => p !== url));
 
+    // --- SHARED TIER CALCULATION USAGE ---
     const selectedLead = leads.find(l => l.id === selectedLeadId);
-    const matchScore = selectedLead && claim.trials?.screener_questions ? { count: claim.trials.screener_questions.reduce((acc: number, q: any, i: number) => acc + (selectedLead.answers?.[i] === q.correct_answer ? 1 : 0), 0), total: claim.trials.screener_questions.length } : { count: 0, total: 0 };
-    const missedCount = matchScore.total - matchScore.count;
+    
+    // Match Score with Unsure logic
+    const calculateMatchScore = () => {
+        if (!selectedLead || !questions || questions.length === 0) return { count: 0, unsure: 0, total: 0, wrong: 0 };
+        const total = questions.length;
+        let count = 0; let unsure = 0; let wrong = 0;
+        questions.forEach((q: any, i: number) => {
+            const ans = selectedLead.answers && selectedLead.answers[i];
+            if (ans === q.correct_answer) count++;
+            else if (ans && (ans.toLowerCase().includes("know") || ans.toLowerCase().includes("unsure"))) unsure++;
+            else wrong++;
+        });
+        return { count, unsure, wrong, total };
+    };
+    const matchScore = calculateMatchScore();
     const formatTime = (dateStr: string) => { return new Date(dateStr).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }); };
 
     const StatusColumn = ({ status, label, icon: Icon, colorClass }: any) => {
         const columnLeads = leads.filter(l => {
-            if (status === 'Not Eligible') return (l.site_status === 'Not Eligible' || l.site_status === 'Withdrawn') && l.name.toLowerCase().includes(searchTerm.toLowerCase());
-            return (l.site_status || 'New') === status && l.name.toLowerCase().includes(searchTerm.toLowerCase());
+            const matchesStatus = status === 'Not Eligible' ? (l.site_status === 'Not Eligible' || l.site_status === 'Withdrawn') : (l.site_status || 'New') === status;
+            const matchesSearch = l.name.toLowerCase().includes(searchTerm.toLowerCase());
+            const tier = calculateTier(l, questions); // <--- FIXED: USES GLOBAL FUNCTION
+            const matchesTier = tierFilter === 'all' || tier?.type === tierFilter;
+            return matchesStatus && matchesSearch && matchesTier;
         });
         return (
             <div className="flex-shrink-0 w-80 flex flex-col h-full bg-slate-100/50 rounded-xl border border-slate-200/60 overflow-hidden">
@@ -557,13 +977,23 @@ const GodModeView = ({ claim, onBack }: { claim: any, onBack: () => void }) => {
                     <span className="text-[10px] font-bold bg-white px-2 py-0.5 rounded text-slate-500 shadow-sm">{columnLeads.length}</span>
                 </div>
                 <div className="flex-1 overflow-y-auto p-3 space-y-3">
-                    {columnLeads.map(lead => (
-                        <div key={lead.id} onClick={() => { setSelectedLeadId(lead.id); setNoteBuffer(lead.researcher_notes || ""); setDrawerTab('overview'); }} className={`bg-white p-4 rounded-xl shadow-sm border transition-all cursor-pointer hover:shadow-md ${selectedLeadId === lead.id ? 'border-indigo-600 ring-1 ring-indigo-600' : 'border-slate-200'}`}>
-                            <div className="flex justify-between items-start mb-2"><h4 className="font-bold text-slate-900 text-sm">{lead.name}</h4>{lead.status?.includes('Strong') && <Crown className="h-3 w-3 text-amber-500" />}</div>
-                            <div className="text-xs text-slate-500 mb-3 line-clamp-1">{lead.email}</div>
-                            <div className="flex items-center justify-between text-[10px] text-slate-400"><span className="flex items-center gap-1"><Calendar className="h-3 w-3" /> {new Date(lead.created_at).toLocaleDateString()}</span>{lead.unread_count > 0 && <span className="bg-red-500 text-white text-[10px] px-2 py-0.5 rounded-full">{lead.unread_count} Unread</span>}</div>
-                        </div>
-                    ))}
+                    {columnLeads.map(lead => {
+                        const tier = calculateTier(lead, questions); // <--- FIXED
+                        const TierIcon = tier?.icon || HelpCircle;
+                        return (
+                            <div key={lead.id} onClick={() => { setSelectedLeadId(lead.id); setNoteBuffer(lead.researcher_notes || ""); setDrawerTab('overview'); }} className={`bg-white p-4 rounded-xl shadow-sm border transition-all cursor-pointer hover:shadow-md group ${selectedLeadId === lead.id ? 'border-indigo-600 ring-1 ring-indigo-600' : 'border-slate-200 hover:border-indigo-300'} relative`}>
+                                <div className="flex justify-between items-start mb-2">
+                                    <h4 className="font-bold text-slate-900 text-sm">{lead.name}</h4>
+                                    {tier && (<div className={`flex items-center gap-1 px-1.5 py-0.5 rounded text-[9px] font-bold uppercase tracking-wide border ${tier.style}`}><TierIcon className="h-3 w-3" />{tier.label}</div>)}
+                                </div>
+                                {/* NEW: Stats Detail in God Mode Card */}
+                                {tier && <div className="text-[9px] text-slate-400 italic mb-2">{tier.detail}</div>}
+                                <div className="text-xs text-slate-500 mb-3 line-clamp-1">{lead.email}</div>
+                                <div className="flex items-center justify-between text-[10px] text-slate-400"><span className="flex items-center gap-1"><Calendar className="h-3 w-3" /> {new Date(lead.created_at).toLocaleDateString()}</span>{lead.unread_count > 0 && <span className="absolute bottom-2 right-2 bg-red-500 text-white text-[10px] px-2 py-0.5 rounded-full shadow-md z-10 animate-in zoom-in">{lead.unread_count} Unread</span>}</div>
+                            </div>
+                        );
+                    })}
+                    {columnLeads.length === 0 && <div className="text-center py-10 opacity-30 text-xs font-bold text-slate-400 uppercase">No Candidates</div>}
                 </div>
             </div>
         );
@@ -571,13 +1001,12 @@ const GodModeView = ({ claim, onBack }: { claim: any, onBack: () => void }) => {
 
     return (
         <div className="fixed inset-0 z-50 bg-slate-50 flex flex-col font-sans overflow-hidden">
+            {/* --- GOD MODE HEADER --- */}
             <div className="bg-indigo-900 text-white h-16 shrink-0 flex items-center justify-between px-6 shadow-md z-20">
                 <div className="flex items-center gap-4">
                     <button onClick={onBack} className="p-2 hover:bg-white/10 rounded-lg transition-colors"><ArrowLeft className="h-5 w-5" /></button>
                     <div><h2 className="font-bold text-sm">God Mode: {claim.trials?.title}</h2><div className="text-xs text-indigo-300">{claim.researcher_profiles?.company_name} • {claim.site_location?.city}, {claim.site_location?.state}</div></div>
                 </div>
-                
-                {/* READ ONLY TOGGLE */}
                 <div className="flex items-center gap-4">
                     <button onClick={() => setIsReadOnly(!isReadOnly)} className={`flex items-center gap-2 px-3 py-1.5 rounded-full text-xs font-bold transition-all ${isReadOnly ? 'bg-emerald-500 text-white' : 'bg-amber-500 text-white animate-pulse'}`}>
                         {isReadOnly ? <Lock className="h-3 w-3" /> : <Edit3 className="h-3 w-3" />}
@@ -596,21 +1025,22 @@ const GodModeView = ({ claim, onBack }: { claim: any, onBack: () => void }) => {
                 {activeTab === 'leads' && (
                     <>
                         <div className="flex-1 flex flex-col min-w-0">
-                            <div className="h-14 border-b border-slate-200 bg-white px-6 flex items-center justify-between">
-                                <div className="relative w-64"><Search className="absolute left-3 top-2.5 h-4 w-4 text-slate-400" /><input type="text" placeholder="Search..." className="w-full pl-9 pr-4 py-2 bg-slate-100 rounded-lg text-xs" value={searchTerm} onChange={e => setSearchTerm(e.target.value)} /></div>
+                            <div className="h-14 border-b border-slate-200 bg-white px-6 flex items-center justify-between flex-shrink-0">
+                                <div className="relative w-64 mr-4"><Search className="absolute left-3 top-2.5 h-4 w-4 text-slate-400" /><input type="text" placeholder="Search..." className="w-full pl-9 pr-4 py-2 bg-slate-100 rounded-lg text-xs" value={searchTerm} onChange={e => setSearchTerm(e.target.value)} /></div>
+                                {/* NEW: TIER FILTERS */}
+                                <div className="flex items-center gap-2 flex-1">
+                                    <span className="text-[10px] font-bold text-slate-400 uppercase tracking-wide mr-2 flex items-center gap-1"><Filter className="h-3 w-3" /> Filter:</span>
+                                    {[{ id: 'all', label: 'All', icon: Users, color: 'text-slate-600' }, { id: 'diamond', label: 'Perfect', icon: Gem, color: 'text-emerald-600' }, { id: 'gold', label: 'Likely', icon: Medal, color: 'text-amber-600' }, { id: 'silver', label: 'Review', icon: Shield, color: 'text-slate-600' }, { id: 'mismatch', label: 'Mismatch', icon: AlertCircle, color: 'text-rose-600' }].map((f: any) => (
+                                        <button key={f.id} onClick={() => setTierFilter(f.id)} className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-bold transition-all ${tierFilter === f.id ? 'bg-white shadow-sm ring-1 ring-slate-200' : 'text-slate-400 hover:text-slate-600 hover:bg-slate-100'}`}><f.icon className={`h-3 w-3 ${tierFilter === f.id ? f.color : ''}`} />{f.label}</button>
+                                    ))}
+                                </div>
                             </div>
-                            <div className="flex-1 overflow-x-auto p-6"><div className="flex h-full gap-6">
-                                <StatusColumn status="New" label="New" icon={Users} colorClass="bg-blue-500" />
-                                <StatusColumn status="Contacted" label="Screening" icon={Phone} colorClass="bg-amber-500" />
-                                <StatusColumn status="Scheduled" label="Scheduled" icon={Calendar} colorClass="bg-purple-500" />
-                                <StatusColumn status="Enrolled" label="Enrolled" icon={CheckCircle2} colorClass="bg-emerald-500" />
-                                <StatusColumn status="Not Eligible" label="Archived" icon={Archive} colorClass="bg-slate-500" />
-                            </div></div>
+                            <div className="flex-1 overflow-x-auto p-6"><div className="flex h-full gap-6"><StatusColumn status="New" label="New" icon={Users} colorClass="bg-blue-500" /><StatusColumn status="Contacted" label="Screening" icon={Phone} colorClass="bg-amber-500" /><StatusColumn status="Scheduled" label="Scheduled" icon={Calendar} colorClass="bg-purple-500" /><StatusColumn status="Enrolled" label="Enrolled" icon={CheckCircle2} colorClass="bg-emerald-500" /><StatusColumn status="Not Eligible" label="Archived" icon={Archive} colorClass="bg-slate-500" /></div></div>
                         </div>
                         {selectedLead && (
                             <div className="w-[600px] border-l border-slate-200 bg-white flex flex-col h-full shadow-2xl z-20">
-                                <div className="h-16 border-b px-6 flex items-center justify-between">
-                                    <div><h2 className="font-bold text-lg">{selectedLead.name}</h2><div className="flex items-center gap-2 mt-0.5"><span className="text-[10px] text-slate-400 uppercase font-bold tracking-wider">ID: {String(selectedLead.id).slice(0,8)}</span><span className={`px-2 py-0.5 rounded text-[10px] font-bold uppercase tracking-wide ${selectedLead.status?.includes('Strong') ? 'bg-emerald-100 text-emerald-700' : 'bg-slate-100 text-slate-600'}`}>{selectedLead.status || 'Standard'}</span></div></div>
+                                <div className="h-16 border-b px-6 flex items-center justify-between bg-slate-50/50">
+                                    <div><h2 className="font-bold text-lg">{selectedLead.name}</h2><div className="flex items-center gap-2 mt-0.5"><span className="text-[10px] text-slate-400 uppercase font-bold tracking-wider">ID: {String(selectedLead.id).slice(0,8)}</span>{(() => { const tier = calculateTier(selectedLead, questions); const TierIcon = tier?.icon || HelpCircle; return tier ? (<div className={`flex items-center gap-1 px-2 py-0.5 rounded text-[10px] font-bold uppercase tracking-wide border ${tier.style}`}><TierIcon className="h-3 w-3" />{tier.label}</div>) : null; })()}</div></div>
                                     <button onClick={() => setSelectedLeadId(null)}><X className="h-5 w-5" /></button>
                                 </div>
                                 <div className="flex border-b border-slate-200 px-6">
@@ -624,76 +1054,74 @@ const GodModeView = ({ claim, onBack }: { claim: any, onBack: () => void }) => {
                                 <div className="p-6 overflow-y-auto flex-1 bg-slate-50/30">
                                     {drawerTab === 'overview' && (
                                         <div className="space-y-6">
-                                            <div><h3 className="text-[10px] font-bold text-slate-400 uppercase mb-3 tracking-wider">Contact Details</h3><div className="grid grid-cols-2 gap-4"><div className="flex items-center justify-between p-3 border border-slate-100 rounded-lg hover:bg-slate-50 transition-colors group bg-white shadow-sm"><div className="flex items-center gap-3 overflow-hidden"><div className="p-2 bg-indigo-50 text-indigo-600 rounded-lg shrink-0"><Mail className="h-4 w-4" /></div><div className="text-xs font-bold text-slate-700 truncate">{selectedLead.email}</div></div><a href={`mailto:${selectedLead.email}`} className="text-[10px] font-bold text-indigo-600 opacity-0 group-hover:opacity-100 shrink-0">EMAIL</a></div><div className="flex items-center justify-between p-3 border border-slate-100 rounded-lg hover:bg-slate-50 transition-colors group bg-white shadow-sm"><div className="flex items-center gap-3"><div className="p-2 bg-emerald-50 text-emerald-600 rounded-lg shrink-0"><Phone className="h-4 w-4" /></div><div className="text-xs font-bold text-slate-700">{selectedLead.phone}</div></div><a href={`tel:${selectedLead.phone}`} className="text-[10px] font-bold text-emerald-600 opacity-0 group-hover:opacity-100 shrink-0">CALL</a></div></div></div>
                                             <div className="bg-white p-4 rounded-xl border border-slate-200 flex items-center justify-between shadow-sm"><div className="text-xs font-bold text-slate-500 uppercase tracking-wide">Pipeline Status</div><div className="relative w-48"><select className="w-full appearance-none bg-slate-50 border border-slate-200 hover:border-indigo-300 text-slate-900 font-bold text-sm rounded-lg py-2 pl-3 pr-8 outline-none focus:ring-2 focus:ring-indigo-500 transition-all cursor-pointer shadow-sm" value={selectedLead.site_status || 'New'} onChange={(e) => updateLeadStatus(selectedLead.id, e.target.value as LeadStatus)} disabled={isReadOnly}><option value="New">New Applicant</option><option value="Contacted">Contacted / Screening</option><option value="Scheduled">Scheduled Visit</option><option value="Enrolled">Enrolled</option><option value="Not Eligible">Not Eligible</option><option value="Withdrawn">Withdrawn</option></select><ChevronDown className="absolute right-3 top-3 h-3 w-3 text-slate-400 pointer-events-none" /></div></div>
                                             
-                                            {/* CLINICAL NOTES SECTION */}
                                             <div className="bg-white border border-slate-200 rounded-xl shadow-sm overflow-hidden flex flex-col h-64">
-                                                <div className="bg-slate-50 px-4 py-3 border-b border-slate-200 flex justify-between items-center">
-                                                    <h3 className="text-xs font-bold text-slate-700 uppercase flex items-center gap-2"><ClipboardList className="h-4 w-4 text-indigo-600" /> Clinical Notes</h3>
-                                                    <div className="flex items-center gap-3">
-                                                        <span className="text-[10px] text-slate-400 italic">Auto-save on blur</span>
-                                                        <button onClick={saveNote} disabled={isReadOnly} className="text-[10px] bg-indigo-50 text-indigo-600 px-2 py-1 rounded font-bold border border-indigo-100 hover:bg-indigo-100 flex items-center gap-1 disabled:opacity-50"><Save className="h-3 w-3" /> Save</button>
-                                                    </div>
-                                                </div>
+                                                <div className="bg-slate-50 px-4 py-3 border-b border-slate-200 flex justify-between items-center"><h3 className="text-xs font-bold text-slate-700 uppercase flex items-center gap-2"><ClipboardList className="h-4 w-4 text-indigo-600" /> Clinical Notes</h3><div className="flex items-center gap-3"><span className="text-[10px] text-slate-400 italic">Auto-save on blur</span><button onClick={saveNote} disabled={isReadOnly} className="text-[10px] bg-indigo-50 text-indigo-600 px-2 py-1 rounded font-bold border border-indigo-100 hover:bg-indigo-100 flex items-center gap-1 disabled:opacity-50"><Save className="h-3 w-3" /> Save</button></div></div>
                                                 <textarea className="flex-1 w-full p-4 text-sm text-slate-800 outline-none resize-none font-medium leading-relaxed" placeholder="Enter clinical observations, call logs, or screening notes here..." value={noteBuffer} onChange={(e) => setNoteBuffer(e.target.value)} onBlur={saveNote} disabled={isReadOnly} />
                                             </div>
 
-                                            {/* SCREENER RESPONSES & HISTORY */}
-                                            <div>
-                                                <h3 className="text-[10px] font-bold text-slate-400 uppercase mb-3 tracking-wider">Screener Responses & History</h3>
-                                                {missedCount > 0 && <div className="mb-4 p-4 rounded-xl bg-amber-50 border border-amber-100 flex items-start gap-3"><AlertCircle className="h-5 w-5 text-amber-500 shrink-0 mt-0.5" /><div><h4 className="text-sm font-bold text-amber-800">Criteria Mismatch</h4><p className="text-xs text-amber-700 mt-1 leading-relaxed">This patient missed <strong>{missedCount} criteria</strong>. Please contact the patient to verify if their responses are accurate before scheduling.</p></div></div>}
-                                                
-                                                <div className="bg-white border border-slate-200 rounded-xl overflow-hidden shadow-sm">
-                                                    <div className="bg-slate-50 px-4 py-2 border-b border-slate-200 flex items-center justify-between">
-                                                        <div className="flex items-center gap-2"><FileText className="h-3 w-3 text-slate-400" /><span className="text-[10px] font-bold text-slate-500 uppercase">Questionnaire Data</span></div>
-                                                        <div className={`flex items-center gap-1.5 px-2 py-1 rounded text-[10px] font-bold border ${matchScore.count === matchScore.total ? 'bg-emerald-50 text-emerald-700 border-emerald-100' : 'bg-amber-50 text-amber-700 border-amber-100'}`}><Calculator className="h-3 w-3" />{matchScore.count}/{matchScore.total} Criteria Met</div>
+                                            {/* EDUCATIONAL ALERTS */}
+                                            {matchScore.wrong > 0 ? (
+                                                <div className="mb-4 p-4 rounded-xl bg-amber-50 border border-amber-100 flex items-start gap-3">
+                                                    <AlertCircle className="h-5 w-5 text-amber-500 shrink-0 mt-0.5" />
+                                                    <div>
+                                                        <h4 className="text-sm font-bold text-amber-800">Criteria Mismatch ({matchScore.wrong} Missed)</h4>
+                                                        <p className="text-xs text-amber-700 mt-1 leading-relaxed">This patient answered incorrectly. Often this is a mistake. Call to verify.<br/><br/><strong>💡 Pro Tip:</strong> If they clarify their answer about a question on the call, update their answer to "Yes" or "No" by clicking the <strong>Pencil Icon <PenSquare className="inline h-3 w-3" /></strong> below. Correcting the answer will automatically update their Tier score.</p>
                                                     </div>
-                                                    <div className="p-4 space-y-4 max-h-[500px] overflow-y-auto">
-                                                        {claim.trials?.screener_questions?.map((q: any, i: number) => { 
-                                                            const ans = selectedLead.answers && selectedLead.answers[i]; 
-                                                            const isMatch = ans === q.correct_answer; 
-                                                            return ( 
-                                                                <div key={i} className={`p-4 rounded-xl border ${isMatch ? 'bg-slate-50 border-slate-200' : 'bg-red-50 border-red-200'}`}>
-                                                                    <p className="text-sm text-slate-800 font-medium mb-3 leading-relaxed">{q.question}</p>
+                                                </div>
+                                            ) : matchScore.unsure > 0 ? (
+                                                <div className="mb-4 p-4 rounded-xl bg-indigo-50 border border-indigo-100 flex items-start gap-3">
+                                                    <Info className="h-5 w-5 text-indigo-500 shrink-0 mt-0.5" />
+                                                    <div>
+                                                        <h4 className="text-sm font-bold text-indigo-800">Clarification Needed ({matchScore.unsure} Unsure)</h4>
+                                                        <p className="text-xs text-indigo-700 mt-1 leading-relaxed">This candidate is a strong match but needs clarification on a few points.<br/><br/><strong>💡 Pro Tip:</strong> If they clarify their answer about a question on the call, update "I don't know" to "Yes" or "No" by clicking the <strong>Pencil Icon <PenSquare className="inline h-3 w-3" /></strong> below. Correcting the answer will automatically update their Tier score.</p>
+                                                    </div>
+                                                </div>
+                                            ) : null}
+
+                                            <div className="bg-white border border-slate-200 rounded-xl overflow-hidden shadow-sm">
+                                                <div className="bg-slate-50 px-4 py-2 border-b border-slate-200 flex items-center justify-between"><div className="flex items-center gap-2"><FileText className="h-3 w-3 text-slate-400" /><span className="text-[10px] font-bold text-slate-500 uppercase">Questionnaire Data</span></div><div className={`flex items-center gap-1.5 px-2 py-1 rounded text-[10px] font-bold border ${matchScore.count === matchScore.total ? 'bg-emerald-50 text-emerald-700 border-emerald-100' : 'bg-amber-50 text-amber-700 border-amber-100'}`}><Calculator className="h-3 w-3" />{matchScore.count}/{matchScore.total} Met {matchScore.unsure > 0 && <span className="ml-1 text-amber-600">({matchScore.unsure} Unsure)</span>}</div></div>
+                                                <div className="p-4 space-y-4 max-h-[500px] overflow-y-auto">
+                                                    {questions.map((q: any, i: number) => { 
+                                                        const ans = selectedLead.answers && selectedLead.answers[i]; 
+                                                        const isMatch = ans === q.correct_answer; 
+                                                        const isUnsure = ans && (ans.toLowerCase().includes("know") || ans.toLowerCase().includes("unsure"));
+                                                        const isEditing = editingAnswerIndex === i;
+                                                        let cardClass = isMatch ? 'bg-slate-50 border-slate-200' : isUnsure ? 'bg-orange-50 border-orange-200' : 'bg-red-50 border-red-200';
+                                                        let badgeClass = isMatch ? 'text-emerald-700 bg-white border-emerald-200 shadow-sm' : isUnsure ? 'text-orange-700 bg-white border-orange-200 shadow-sm' : 'text-red-700 bg-white border-red-200 shadow-sm';
+
+                                                        return ( 
+                                                            <div key={i} className={`p-4 rounded-xl border ${cardClass} relative group/card`}>
+                                                                <p className="text-sm text-slate-800 font-medium mb-3 pr-8">{q.question}</p>
+                                                                {isEditing && !isReadOnly ? (
+                                                                    <div className="flex items-center gap-2 animate-in fade-in"><select className="flex-1 bg-white border border-indigo-300 rounded-lg px-2 py-1 text-sm outline-none focus:ring-2 focus:ring-indigo-500" value={tempAnswer} onChange={(e) => setTempAnswer(e.target.value)}><option value="Yes">Yes</option><option value="No">No</option><option value="I don't know">I don't know</option></select><button onClick={() => updateLeadAnswer(i, tempAnswer)} className="bg-indigo-600 text-white px-2 py-1 rounded text-xs font-bold hover:bg-indigo-700">Save</button><button onClick={() => setEditingAnswerIndex(null)} className="text-slate-400 hover:text-slate-600 px-2">Cancel</button></div>
+                                                                ) : (
                                                                     <div className="flex items-center justify-between">
-                                                                        <div className="flex items-center gap-2"><span className="text-[10px] text-slate-400 font-bold uppercase tracking-wide">Patient Answer:</span><span className={`text-xs font-bold px-3 py-1 rounded-md border ${isMatch ? 'text-emerald-700 bg-white border-emerald-200 shadow-sm' : 'text-red-700 bg-white border-red-200 shadow-sm'}`}>{ans || "N/A"}</span></div>
-                                                                        {!isMatch && (<div className="flex items-center gap-2"><span className="text-[10px] text-slate-400 font-bold uppercase tracking-wide">Required:</span><span className="text-xs font-bold text-slate-600 bg-slate-200 px-2 py-1 rounded">{q.correct_answer}</span></div>)}
+                                                                        <div className="flex items-center gap-2"><span className="text-[10px] text-slate-400 font-bold uppercase">Patient Answer:</span><span className={`text-xs font-bold px-3 py-1 rounded-md border ${badgeClass}`}>{ans || "N/A"}</span>{!isReadOnly && <button onClick={() => { setEditingAnswerIndex(i); setTempAnswer(normalizeAnswer(ans)); }} className="p-1 text-slate-400 hover:text-indigo-600 hover:bg-white rounded transition-all opacity-0 group-hover/card:opacity-100" title="Correct this answer"><PenSquare className="h-3 w-3" /></button>}</div>
+                                                                        {!isMatch && <div className="flex items-center gap-2"><span className="text-[10px] text-slate-400 font-bold uppercase">Required:</span><span className="text-xs font-bold text-slate-600 bg-slate-200 px-2 py-1 rounded">{q.correct_answer}</span></div>}
                                                                     </div>
-                                                                </div> 
-                                                            ); 
-                                                        })}
-                                                    </div>
+                                                                )}
+                                                            </div> 
+                                                        ); 
+                                                    })}
                                                 </div>
                                             </div>
                                         </div>
                                     )}
                                     {drawerTab === 'messages' && (
                                         <div className="flex flex-col h-[600px] bg-white border border-slate-200 rounded-xl shadow-sm overflow-hidden">
-                                            <div className="flex-1 p-4 overflow-y-auto bg-slate-50 space-y-4">
+                                            <div ref={chatBottomRef} className="flex-1 p-4 overflow-y-auto bg-slate-50 space-y-4">
                                                 {messages.length === 0 && <div className="text-center py-10 text-slate-400 text-xs">No messages yet.</div>}
                                                 {messages.map((msg, i) => (
-                                                    <div key={i} className={`flex ${msg.sender_role === 'researcher' ? 'justify-end' : 'justify-start'}`}>
-                                                        <div className={`max-w-[80%] p-3 rounded-xl text-sm ${msg.sender_role === 'researcher' ? 'bg-indigo-600 text-white rounded-br-none' : 'bg-white border border-slate-200 rounded-bl-none text-slate-700'}`}>
-                                                            <div>{msg.content}</div>
-                                                            <div className="text-[10px] text-indigo-200 mt-1 flex items-center justify-end gap-1">
-                                                                {formatTime(msg.created_at)}
-                                                                {msg.sender_role === 'researcher' && (
-                                                                    <span>{msg.is_read ? <CheckCheck className="h-3 w-3" /> : <Check className="h-3 w-3" />}</span>
-                                                                )}
-                                                            </div>
-                                                        </div>
-                                                    </div>
+                                                    <div key={i} className={`flex ${msg.sender_role === 'researcher' ? 'justify-end' : 'justify-start'}`}><div className={`max-w-[80%] p-3 rounded-xl text-sm ${msg.sender_role === 'researcher' ? 'bg-indigo-600 text-white rounded-br-none' : 'bg-white border border-slate-200 rounded-bl-none text-slate-700'}`}><div>{msg.content}</div><div className="text-[10px] text-indigo-200 mt-1 flex items-center justify-end gap-1">{formatTime(msg.created_at)} {msg.sender_role === 'researcher' && (<span>{msg.is_read ? <CheckCheck className="h-3 w-3" /> : <Check className="h-3 w-3" />}</span>)}</div></div></div>
                                                 ))}
-                                                <div ref={chatBottomRef} />
                                             </div>
                                             <div className="p-3 bg-white border-t border-slate-100 flex gap-2"><input type="text" className="flex-1 bg-slate-50 border border-slate-200 rounded-lg px-4 py-2 text-sm outline-none focus:ring-2 focus:ring-indigo-500" placeholder="Type a secure message..." value={messageInput} onChange={e => setMessageInput(e.target.value)} onKeyDown={e => e.key === 'Enter' && handleSendMessage()} disabled={isReadOnly} /><button onClick={handleSendMessage} className="p-2 bg-indigo-600 text-white rounded-lg hover:bg-indigo-700 transition-colors disabled:opacity-50" disabled={isReadOnly}><Send className="h-4 w-4" /></button></div>
                                         </div>
                                     )}
                                     {drawerTab === 'history' && (
-                                        <div className="space-y-6">
-                                            <div className="bg-white border border-slate-200 rounded-xl p-4 shadow-sm"><h3 className="text-xs font-bold text-slate-900 mb-4 flex items-center gap-2"><History className="h-4 w-4 text-slate-400" /> Audit Log</h3><div className="space-y-6 relative pl-2"><div className="absolute left-3.5 top-2 bottom-2 w-px bg-slate-100"></div>{historyLogs.map((log: any, i: number) => { const isAppReceived = log.action === 'Application Received'; return ( <div key={i} className="relative flex gap-4 animate-in slide-in-from-left-2"><div className={`w-3 h-3 rounded-full ring-4 ring-white z-10 shrink-0 mt-1.5 ${isAppReceived ? 'bg-emerald-500' : 'bg-indigo-500'}`}></div><div><div className="text-xs font-bold text-slate-900">{log.action}</div><div className="text-[10px] text-slate-500">{new Date(log.created_at).toLocaleString()} by {log.performed_by}</div><div className="text-xs text-slate-600 mt-1">{log.detail}</div></div></div> ); })}</div></div>
-                                        </div>
+                                        <div className="space-y-6"><div className="bg-white border border-slate-200 rounded-xl p-4 shadow-sm"><h3 className="text-xs font-bold text-slate-900 mb-4 flex items-center gap-2"><History className="h-4 w-4 text-slate-400" /> Audit Log</h3><div className="space-y-6 relative pl-2"><div className="absolute left-3.5 top-2 bottom-2 w-px bg-slate-100"></div>{historyLogs.map((log: any, i: number) => { const isAppReceived = log.action === 'Application Received'; return ( <div key={i} className="relative flex gap-4 animate-in slide-in-from-left-2"><div className={`w-3 h-3 rounded-full ring-4 ring-white z-10 shrink-0 mt-1.5 ${isAppReceived ? 'bg-emerald-500' : 'bg-indigo-500'}`}></div><div><div className="text-xs font-bold text-slate-900">{log.action}</div><div className="text-[10px] text-slate-500">{new Date(log.created_at).toLocaleString()} by {log.performed_by}</div><div className="text-xs text-slate-600 mt-1">{log.detail}</div></div></div> ); })}</div></div></div>
                                     )}
                                 </div>
                                 <div className="p-4 border-t border-slate-100 bg-slate-50 flex justify-between items-center"><span className="text-[10px] text-slate-400">Lead ID: {selectedLead.id}</span>{isReadOnly ? <span className="text-xs text-slate-400 italic">Read Only Mode</span> : <button onClick={triggerDelete} className="text-xs font-bold text-red-400 hover:text-red-600 flex items-center gap-1 transition-colors px-2 py-1 hover:bg-red-50 rounded"><Trash2 className="h-3 w-3" /> Delete</button>}</div>
@@ -724,20 +1152,22 @@ const GodModeView = ({ claim, onBack }: { claim: any, onBack: () => void }) => {
 
                 {(activeTab === 'profile' || activeTab === 'media') && (
                     <div className="flex-1 overflow-y-auto p-10 bg-slate-50">
-                        {isReadOnly && <div className="bg-amber-50 p-4 rounded-xl border border-amber-200 mb-6 flex items-center gap-3 text-amber-800 text-sm font-bold sticky top-0 z-50"><Lock className="h-4 w-4" /> Editing Locked. Toggle "Editing Mode" to make changes.</div>}
-                        <div className={`max-w-4xl mx-auto space-y-8 pb-20 ${isReadOnly ? 'opacity-80 pointer-events-none' : ''}`}>
-                            {activeTab === 'profile' ? (
-                                <>
-                                    <div className="bg-white p-6 rounded-xl border border-slate-200 shadow-sm mb-6"><h3 className="font-bold text-slate-900 mb-4">Study Overview</h3><textarea className="w-full h-64 p-4 bg-slate-50 border border-slate-200 rounded-xl outline-none text-slate-900 text-sm leading-relaxed focus:ring-2 focus:ring-indigo-500" value={customSummary} onChange={(e) => setCustomSummary(e.target.value)} placeholder="Enter patient-friendly description..." /></div>
-                                    <div className="bg-white p-6 rounded-xl border border-slate-200 shadow-sm"><div className="flex justify-between items-center mb-6"><h3 className="font-bold text-slate-900">Screener Questions</h3><button onClick={addQuestion} className="text-xs font-bold text-indigo-600 bg-indigo-50 px-3 py-2 rounded-lg hover:bg-indigo-100">+ Add Question</button></div><div className="space-y-4">{questions.map((q, idx) => (<div key={idx} className="flex gap-4 items-center group"><div className="flex-1"><input type="text" value={q.question} onChange={(e) => updateQuestionText(idx, e.target.value)} className="w-full p-3 bg-slate-50 border border-slate-200 rounded-lg text-sm focus:ring-2 focus:ring-indigo-500 outline-none" placeholder="Question..." /></div><button onClick={() => toggleAnswer(idx)} className={`w-24 py-3 rounded-lg text-xs font-bold border ${q.correct_answer === 'Yes' ? 'bg-emerald-50 text-emerald-700 border-emerald-200' : 'bg-red-50 text-red-700 border-red-200'}`}>{q.correct_answer}</button><button onClick={() => removeQuestion(idx)} className="p-3 text-slate-400 hover:text-red-500 hover:bg-red-50 rounded-lg transition-colors"><Trash2 className="h-4 w-4" /></button></div>))}</div></div>
-                                </>
-                            ) : (
-                                <>
-                                    <div className="bg-white p-6 rounded-xl border border-slate-200 shadow-sm"><div className="flex items-start gap-4 mb-6"><div className="p-2 bg-indigo-50 text-indigo-600 rounded-lg"><Video className="h-5 w-5" /></div><div><h3 className="font-bold text-slate-900">Intro Video</h3></div></div><input type="text" value={videoUrl} onChange={(e) => setVideoUrl(e.target.value)} placeholder="Paste link..." className="w-full p-3 bg-slate-50 border border-slate-200 rounded-xl outline-none focus:ring-2 focus:ring-indigo-500 text-sm" /></div>
-                                    <div className="bg-white p-6 rounded-xl border border-slate-200 shadow-sm"><div className="flex justify-between items-center mb-6"><div className="flex items-center gap-3"><div className="p-2 bg-indigo-50 text-indigo-600 rounded-lg"><MessageSquare className="h-5 w-5" /></div><div><h3 className="font-bold text-slate-900">Q&A</h3></div></div><button onClick={addFaq} className="text-xs font-bold text-indigo-600 bg-indigo-50 px-3 py-2 rounded-lg hover:bg-indigo-100">+ Add Question</button></div><div className="space-y-4">{faqs.map((f, idx) => (<div key={idx} className="p-4 bg-slate-50 rounded-xl border border-slate-100 relative group"><button onClick={() => removeFaq(idx)} className="absolute top-4 right-4 text-slate-300 hover:text-red-500 transition-colors"><X className="h-4 w-4" /></button><input type="text" value={f.question} onChange={(e) => updateFaq(idx, 'question', e.target.value)} className="w-full bg-transparent border-b border-slate-200 pb-2 mb-2 text-sm font-bold text-slate-900 outline-none" /><textarea value={f.answer} onChange={(e) => updateFaq(idx, 'answer', e.target.value)} className="w-full bg-transparent text-sm text-slate-600 outline-none resize-none" rows={2} /></div>))}</div></div>
-                                </>
-                            )}
-                            <div className="fixed bottom-0 left-0 right-0 md:left-64 bg-white/90 backdrop-blur-md border-t border-slate-200 p-4 z-40 flex justify-end px-10 shadow-lg"><button onClick={saveSettings} disabled={isSaving} className="flex items-center gap-2 bg-slate-900 text-white px-8 py-3 rounded-xl font-bold">{isSaving ? <Loader2 className="animate-spin" /> : "Save Changes"}</button></div>
+                        <div className="max-w-4xl mx-auto space-y-8 pb-20 relative">
+                            {isReadOnly && <div className="bg-slate-800 text-white p-4 rounded-xl mb-6 flex items-center gap-3"><Lock className="h-5 w-5" /> <div><strong>Read Only Mode.</strong> Enable Editing Mode at the top to make changes.</div></div>}
+                            <div className={isReadOnly ? 'opacity-75 pointer-events-none' : ''}>
+                                {activeTab === 'profile' ? (
+                                    <>
+                                        <div className="bg-white p-6 rounded-xl border border-slate-200 shadow-sm mb-6"><h3 className="font-bold text-slate-900 mb-4">Study Overview</h3><textarea className="w-full h-64 p-4 bg-slate-50 border border-slate-200 rounded-xl outline-none text-slate-900 text-sm leading-relaxed focus:ring-2 focus:ring-indigo-500" value={customSummary} onChange={(e) => setCustomSummary(e.target.value)} placeholder="Enter patient-friendly description..." /></div>
+                                        <div className="bg-white p-6 rounded-xl border border-slate-200 shadow-sm"><div className="flex justify-between items-center mb-6"><h3 className="font-bold text-slate-900">Screener Questions</h3><button onClick={addQuestion} className="text-xs font-bold text-indigo-600 bg-indigo-50 px-3 py-2 rounded-lg hover:bg-indigo-100">+ Add Question</button></div><div className="space-y-4">{questions.map((q, idx) => (<div key={idx} className="flex gap-4 items-center group"><div className="flex-1"><input type="text" value={q.question} onChange={(e) => updateQuestionText(idx, e.target.value)} className="w-full p-3 bg-slate-50 border border-slate-200 rounded-lg text-sm focus:ring-2 focus:ring-indigo-500 outline-none" placeholder="Question..." /></div><button onClick={() => toggleAnswer(idx)} className={`w-24 py-3 rounded-lg text-xs font-bold border ${q.correct_answer === 'Yes' ? 'bg-emerald-50 text-emerald-700 border-emerald-200' : 'bg-red-50 text-red-700 border-red-200'}`}>{q.correct_answer}</button><button onClick={() => removeQuestion(idx)} className="p-3 text-slate-400 hover:text-red-500 hover:bg-red-50 rounded-lg transition-colors"><Trash2 className="h-4 w-4" /></button></div>))}</div></div>
+                                    </>
+                                ) : (
+                                    <>
+                                        <div className="bg-white p-6 rounded-xl border border-slate-200 shadow-sm"><div className="flex items-start gap-4 mb-6"><div className="p-2 bg-indigo-50 text-indigo-600 rounded-lg"><Video className="h-5 w-5" /></div><div><h3 className="font-bold text-slate-900">Intro Video</h3></div></div><input type="text" value={videoUrl} onChange={(e) => setVideoUrl(e.target.value)} placeholder="Paste link..." className="w-full p-3 bg-slate-50 border border-slate-200 rounded-xl outline-none focus:ring-2 focus:ring-indigo-500 text-sm" /></div>
+                                        <div className="bg-white p-6 rounded-xl border border-slate-200 shadow-sm"><div className="flex justify-between items-center mb-6"><div className="flex items-center gap-3"><div className="p-2 bg-indigo-50 text-indigo-600 rounded-lg"><MessageSquare className="h-5 w-5" /></div><div><h3 className="font-bold text-slate-900">Q&A</h3></div></div><button onClick={addFaq} className="text-xs font-bold text-indigo-600 bg-indigo-50 px-3 py-2 rounded-lg hover:bg-indigo-100">+ Add Question</button></div><div className="space-y-4">{faqs.map((f, idx) => (<div key={idx} className="p-4 bg-slate-50 rounded-xl border border-slate-100 relative group"><button onClick={() => removeFaq(idx)} className="absolute top-4 right-4 text-slate-300 hover:text-red-500 transition-colors"><X className="h-4 w-4" /></button><input type="text" value={f.question} onChange={(e) => updateFaq(idx, 'question', e.target.value)} className="w-full bg-transparent border-b border-slate-200 pb-2 mb-2 text-sm font-bold text-slate-900 outline-none" /><textarea value={f.answer} onChange={(e) => updateFaq(idx, 'answer', e.target.value)} className="w-full bg-transparent text-sm text-slate-600 outline-none resize-none" rows={2} /></div>))}</div></div>
+                                    </>
+                                )}
+                                <div className="fixed bottom-0 left-0 right-0 bg-white/90 backdrop-blur-md border-t border-slate-200 p-4 z-40 flex justify-end px-10 shadow-lg"><button onClick={saveSettings} disabled={isReadOnly || isSaving} className="flex items-center gap-2 bg-slate-900 text-white px-8 py-3 rounded-xl font-bold shadow-lg disabled:opacity-50">{isSaving ? <Loader2 className="h-4 w-4 animate-spin" /> : <Save className="h-4 w-4" />} Save Changes</button></div>
+                            </div>
                         </div>
                     </div>
                 )}

@@ -1,31 +1,52 @@
 "use client";
 
-import { useState, useMemo } from 'react';
+import { useState, useMemo, useEffect } from 'react';
 import { useRouter } from 'next/navigation'; 
-// FIX: Added Loader2 to the import list below
 import { 
   ClipboardCheck, X, ShieldCheck, ArrowRight, ScanSearch, 
   PartyPopper, Check, Lock, BookOpen, ChevronDown, FileText, 
-  FlaskConical, CheckCircle2, Share2, AlertCircle, Eye, EyeOff, Loader2
+  FlaskConical, CheckCircle2, Share2, AlertCircle, Eye, EyeOff, 
+  Loader2, HelpCircle, Target, Syringe, Clock, Tags, Pill, Activity,
+  Phone, Mail, User
 } from 'lucide-react';
 import { supabase } from '@/lib/supabase';
 import confetti from 'canvas-confetti';
+import Link from 'next/link';
 
 export default function TrialClientLogic({ trial, sidebarMode = false }: { trial: any, sidebarMode?: boolean }) {
   const router = useRouter(); 
 
   // --- STATE ---
+  const [currentUser, setCurrentUser] = useState<any>(null); 
   const [isModalOpen, setIsModalOpen] = useState(false);
   const [answers, setAnswers] = useState<Record<string, string>>({});
   const [screenerStep, setScreenerStep] = useState<'intro' | 'quiz' | 'analyzing' | 'form' | 'success'>('intro');
   const [leadStatus, setLeadStatus] = useState<'Strong Lead' | 'Unlikely - Review Needed'>('Strong Lead');
   
-  // Form State
-  const [leadForm, setLeadForm] = useState({ name: '', email: '', phone: '', password: '' });
+  // --- FORM STATE ---
+  const [leadForm, setLeadForm] = useState({ 
+      firstName: '', 
+      lastName: '', 
+      email: '', 
+      phone: '', 
+      password: '', 
+      confirmPassword: '' 
+  });
+  
+  const [agreedToTerms, setAgreedToTerms] = useState(false);
   const [showPassword, setShowPassword] = useState(false);
   const [submittingLead, setSubmittingLead] = useState(false);
 
-  // --- DATA PARSING HELPERS ---
+  // --- AUTH CHECK ---
+  useEffect(() => {
+    const checkUser = async () => {
+        const { data: { user } } = await supabase.auth.getUser();
+        setCurrentUser(user);
+    };
+    checkUser();
+  }, []);
+
+  // --- DATA PARSING ---
   const safeParse = (data: any) => {
     if (!data) return null;
     if (Array.isArray(data) || typeof data === 'object') return data;
@@ -38,7 +59,7 @@ export default function TrialClientLogic({ trial, sidebarMode = false }: { trial
   const studyDesign = useMemo(() => safeParse(trial.study_design) || {}, [trial.study_design]);
   const screenerQuestions = useMemo(() => safeParse(trial.screener_questions) || [], [trial.screener_questions]);
 
-  // --- LOGIC ---
+  // --- HELPERS ---
   const openScreener = () => {
     setScreenerStep('intro');
     setAnswers({});
@@ -66,21 +87,35 @@ export default function TrialClientLogic({ trial, sidebarMode = false }: { trial
     }
   };
 
+  // --- PHONE FORMATTER (555) 123-1234 ---
+  const formatPhoneNumber = (value: string) => {
+    const numbers = value.replace(/\D/g, '');
+    if (numbers.length <= 3) return numbers;
+    if (numbers.length <= 6) return `(${numbers.slice(0, 3)}) ${numbers.slice(3)}`;
+    return `(${numbers.slice(0, 3)}) ${numbers.slice(3, 6)}-${numbers.slice(6, 10)}`;
+  };
+
+  const handlePhoneChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const formatted = formatPhoneNumber(e.target.value);
+    if (formatted.length <= 14) { 
+        setLeadForm({ ...leadForm, phone: formatted });
+    }
+  };
+
+  // --- QUIZ LOGIC ---
   const handleQuizCheck = async () => {
     setScreenerStep('analyzing');
     await new Promise(resolve => setTimeout(resolve, 2000));
 
-    if (!screenerQuestions || screenerQuestions.length === 0) {
-        setScreenerStep('form'); 
-        return;
-    }
-
     let isMatch = true;
-    screenerQuestions.forEach((q: any, index: number) => {
-      const userAnswer = (answers[index] || "").trim().toLowerCase();
-      const correct = (q.correct_answer || "").trim().toLowerCase();
-      if (userAnswer !== correct) isMatch = false;
-    });
+    if (screenerQuestions && screenerQuestions.length > 0) {
+        screenerQuestions.forEach((q: any, index: number) => {
+            const userAnswer = (answers[index] || "").trim().toLowerCase();
+            const correct = (q.correct_answer || "").trim().toLowerCase();
+            if (userAnswer === "i don't know") { /* Pass */ } 
+            else if (userAnswer !== correct) { isMatch = false; }
+        });
+    }
 
     if (isMatch) {
       setLeadStatus('Strong Lead');
@@ -88,26 +123,94 @@ export default function TrialClientLogic({ trial, sidebarMode = false }: { trial
     } else {
       setLeadStatus('Unlikely - Review Needed');
     }
-    setScreenerStep('form');
+
+    if (currentUser) {
+        handleInstantSubmit(isMatch ? 'Strong Lead' : 'Unlikely - Review Needed');
+    } else {
+        setScreenerStep('form');
+    }
   };
 
-  // --- SUBMIT LOGIC ---
+  // --- INSTANT SUBMIT (Logged In) ---
+  const handleInstantSubmit = async (status: string) => {
+    const primaryLocation = trial.locations && trial.locations.length > 0 ? trial.locations[0] : null;
+    try {
+        const { data: profile } = await supabase
+            .from('candidate_profiles')
+            .select('*')
+            .eq('user_id', currentUser.id)
+            .single();
+
+        const { error: leadError } = await supabase.from('leads').insert({
+            trial_id: trial.nct_id,
+            candidate_id: profile?.id, 
+            user_id: currentUser.id,   
+            name: profile ? `${profile.first_name} ${profile.last_name}` : 'Returning User',
+            email: currentUser.email,
+            phone: profile?.phone || '',
+            status: status,
+            answers: answers,
+            site_city: primaryLocation?.city || 'Unknown',
+            site_state: primaryLocation?.state || 'Unknown',
+            site_status: 'New'
+        });
+
+        if (leadError) throw leadError;
+        setScreenerStep('success');
+        setTimeout(() => { router.push('/dashboard/candidate'); }, 2000);
+    } catch (err: any) {
+        alert("Error submitting application: " + err.message);
+        setScreenerStep('form'); 
+    }
+  };
+
+  // --- FORM SUBMIT (New User) ---
   const handleLeadSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     setSubmittingLead(true);
 
-    // 1. Determine Location (For "Claim Inheritance")
+    // 1. Validate Consent
+    if (!agreedToTerms) {
+        alert("Please agree to the Terms & Privacy Policy to proceed.");
+        setSubmittingLead(false);
+        return;
+    }
+
+    // 2. Validate Password Match
+    if (leadForm.password !== leadForm.confirmPassword) {
+        alert("Passwords do not match.");
+        setSubmittingLead(false);
+        return;
+    }
+
+    // 3. Validate Password Strength (Updated)
+    const hasUpperCase = /[A-Z]/.test(leadForm.password);
+    const hasNumber = /[0-9]/.test(leadForm.password);
+    if (leadForm.password.length < 6 || !hasUpperCase || !hasNumber) {
+        alert("Password must be at least 6 characters and contain a number and an uppercase letter.");
+        setSubmittingLead(false);
+        return;
+    }
+
+    // 4. Validate Phone Length
+    const rawPhone = leadForm.phone.replace(/\D/g, '');
+    if (rawPhone.length !== 10) {
+        alert("Please enter a valid 10-digit phone number.");
+        setSubmittingLead(false);
+        return;
+    }
+
     const primaryLocation = trial.locations && trial.locations.length > 0 ? trial.locations[0] : null;
+    const fullName = `${leadForm.firstName} ${leadForm.lastName}`.trim();
 
     try {
-        // 2. Sign Up User 
         const { data: authData, error: authError } = await supabase.auth.signUp({
             email: leadForm.email,
             password: leadForm.password,
             options: {
                 data: {
                     role: 'candidate',
-                    full_name: leadForm.name
+                    full_name: fullName
                 }
             }
         });
@@ -115,30 +218,25 @@ export default function TrialClientLogic({ trial, sidebarMode = false }: { trial
         if (authError) throw authError;
         if (!authData.user) throw new Error("Auth failed");
 
-        // 3. Create Candidate Profile
-        const nameParts = leadForm.name.trim().split(' ');
-        const firstName = nameParts[0];
-        const lastName = nameParts.slice(1).join(' ') || '';
-
         const { data: profile, error: profileError } = await supabase
             .from('candidate_profiles')
             .upsert({
                 user_id: authData.user.id,
                 email: leadForm.email,
                 phone: leadForm.phone,
-                first_name: firstName,
-                last_name: lastName
+                first_name: leadForm.firstName,
+                last_name: leadForm.lastName
             }, { onConflict: 'user_id' })
             .select()
             .single();
 
         if (profileError) throw profileError;
 
-        // 4. Create Lead 
         const { error: leadError } = await supabase.from('leads').insert({
             trial_id: trial.nct_id,
             candidate_id: profile.id, 
-            name: leadForm.name,
+            user_id: authData.user.id, 
+            name: fullName,
             email: leadForm.email,
             phone: leadForm.phone,
             status: leadStatus,
@@ -150,12 +248,8 @@ export default function TrialClientLogic({ trial, sidebarMode = false }: { trial
 
         if (leadError) throw leadError;
 
-        // 5. Success & Redirect
         setScreenerStep('success');
-        
-        setTimeout(() => {
-            router.push('/dashboard/candidate');
-        }, 2000);
+        setTimeout(() => { router.push('/dashboard/candidate'); }, 2000);
 
     } catch (err: any) {
         console.error("Submission Error:", err);
@@ -170,7 +264,6 @@ export default function TrialClientLogic({ trial, sidebarMode = false }: { trial
 
   const isRecruiting = trial.status && trial.status.toLowerCase().trim() === 'recruiting';
 
-  // --- RENDER SIDEBAR CTA ---
   if (sidebarMode) {
     if (isRecruiting) {
       return (
@@ -192,7 +285,6 @@ export default function TrialClientLogic({ trial, sidebarMode = false }: { trial
                </div>
              </div>
           </div>
-          {/* MODAL */}
           {isModalOpen && (
             <div className="fixed inset-0 z-50 flex items-center justify-center p-4">
               <div className="absolute inset-0 bg-slate-900/60 backdrop-blur-sm transition-opacity" onClick={closeScreener}></div>
@@ -207,6 +299,13 @@ export default function TrialClientLogic({ trial, sidebarMode = false }: { trial
                       <div className="w-16 h-16 bg-indigo-100 text-indigo-600 rounded-full flex items-center justify-center mx-auto mb-4"><ShieldCheck className="h-8 w-8" /></div>
                       <h4 className="text-xl font-bold text-slate-900 mb-2">Check Your Eligibility</h4>
                       <p className="text-slate-600 mb-8 max-w-xs mx-auto text-sm leading-relaxed">Answer a few questions for <strong>{trial.title}</strong>.</p>
+                      
+                      {currentUser && (
+                          <div className="mb-6 p-3 bg-emerald-50 text-emerald-700 text-xs font-bold rounded-lg border border-emerald-100">
+                              👋 Welcome back! Applying as {currentUser.email}
+                          </div>
+                      )}
+
                       <button onClick={() => setScreenerStep('quiz')} className="w-full bg-indigo-600 text-white py-3.5 rounded-xl font-bold hover:bg-indigo-700 flex items-center justify-center gap-2">Start <ArrowRight className="h-4 w-4" /></button>
                     </div>
                   )}
@@ -216,9 +315,9 @@ export default function TrialClientLogic({ trial, sidebarMode = false }: { trial
                         {screenerQuestions?.map((q: any, idx: number) => (
                           <div key={idx} className="mb-6 last:mb-0">
                             <p className="text-base font-semibold text-slate-800 mb-3">{idx + 1}. {q.question}</p>
-                            <div className="grid grid-cols-2 gap-3">
-                              {['Yes', 'No'].map((opt) => (
-                                <button key={opt} onClick={() => setAnswers({...answers, [idx]: opt})} className={`py-3 px-4 rounded-xl text-sm font-bold border-2 transition-all ${answers[idx] === opt ? 'border-indigo-600 bg-indigo-50 text-indigo-700' : 'border-slate-100 bg-white text-slate-500'}`}>{opt}</button>
+                            <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+                              {['Yes', 'No', "I Don't Know"].map((opt) => (
+                                <button key={opt} onClick={() => setAnswers({...answers, [idx]: opt})} className={`py-3 px-2 rounded-xl text-xs sm:text-sm font-bold border-2 transition-all ${answers[idx] === opt ? 'border-indigo-600 bg-indigo-50 text-indigo-700' : 'border-slate-100 bg-white text-slate-500 hover:border-slate-300'}`}>{opt}</button>
                               ))}
                             </div>
                           </div>
@@ -237,6 +336,7 @@ export default function TrialClientLogic({ trial, sidebarMode = false }: { trial
                       <h4 className="text-lg font-bold text-slate-900">AI Analysis in Progress</h4>
                     </div>
                   )}
+                  
                   {screenerStep === 'form' && (
                     <div className="animate-in slide-in-from-right-4 duration-300">
                       <div className={`p-5 rounded-xl mb-6 flex items-start gap-4 border shadow-sm ${leadStatus === 'Strong Lead' ? 'bg-emerald-50 border-emerald-100' : 'bg-indigo-50 border-indigo-100'}`}>
@@ -248,38 +348,109 @@ export default function TrialClientLogic({ trial, sidebarMode = false }: { trial
                           <p className={`text-sm leading-relaxed ${leadStatus === 'Strong Lead' ? 'text-emerald-700' : 'text-indigo-700'}`}>Create your patient portal to track this application.</p>
                         </div>
                       </div>
+                      
                       <form onSubmit={handleLeadSubmit} className="space-y-4">
-                        <div><label className="block text-xs font-bold text-slate-500 uppercase mb-1">Full Name</label><input required type="text" className="w-full p-3 bg-slate-50 border border-slate-200 rounded-lg outline-none focus:ring-2 focus:ring-indigo-500" value={leadForm.name} onChange={e => setLeadForm({...leadForm, name: e.target.value})} /></div>
-                        <div><label className="block text-xs font-bold text-slate-500 uppercase mb-1">Email</label><input required type="email" className="w-full p-3 bg-slate-50 border border-slate-200 rounded-lg outline-none focus:ring-2 focus:ring-indigo-500" value={leadForm.email} onChange={e => setLeadForm({...leadForm, email: e.target.value})} /></div>
-                        <div><label className="block text-xs font-bold text-slate-500 uppercase mb-1">Phone</label><input required type="tel" className="w-full p-3 bg-slate-50 border border-slate-200 rounded-lg outline-none focus:ring-2 focus:ring-indigo-500" value={leadForm.phone} onChange={e => setLeadForm({...leadForm, phone: e.target.value})} /></div>
                         
-                        {/* PASSWORD FIELD */}
-                        <div>
-                            <label className="block text-xs font-bold text-slate-500 uppercase mb-1">Create Password</label>
-                            <div className="relative">
-                                <input 
-                                    required 
-                                    type={showPassword ? "text" : "password"} 
-                                    className="w-full p-3 bg-slate-50 border border-slate-200 rounded-lg outline-none focus:ring-2 focus:ring-indigo-500 pr-10" 
-                                    value={leadForm.password} 
-                                    onChange={e => setLeadForm({...leadForm, password: e.target.value})} 
-                                    minLength={6}
-                                />
-                                <button type="button" onClick={() => setShowPassword(!showPassword)} className="absolute right-3 top-3 text-slate-400 hover:text-slate-600">
-                                    {showPassword ? <EyeOff className="h-5 w-5" /> : <Eye className="h-5 w-5" />}
-                                </button>
+                        {/* FIRST & LAST NAME */}
+                        <div className="grid grid-cols-2 gap-4">
+                            <div>
+                                <label className="block text-xs font-bold text-slate-500 uppercase mb-1">First Name</label>
+                                <div className="relative">
+                                    <User className="absolute left-3 top-3 h-4 w-4 text-slate-400" />
+                                    <input required type="text" className="w-full pl-9 p-3 bg-slate-50 border border-slate-200 rounded-lg outline-none focus:ring-2 focus:ring-indigo-500" value={leadForm.firstName} onChange={e => setLeadForm({...leadForm, firstName: e.target.value})} placeholder="Jane" />
+                                </div>
                             </div>
-                            <p className="text-[10px] text-slate-400 mt-1">Min 6 characters. Used to log in to your dashboard.</p>
+                            <div>
+                                <label className="block text-xs font-bold text-slate-500 uppercase mb-1">Last Name</label>
+                                <input required type="text" className="w-full p-3 bg-slate-50 border border-slate-200 rounded-lg outline-none focus:ring-2 focus:ring-indigo-500" value={leadForm.lastName} onChange={e => setLeadForm({...leadForm, lastName: e.target.value})} placeholder="Doe" />
+                            </div>
                         </div>
 
-                        <button type="submit" disabled={submittingLead} className="w-full bg-slate-900 text-white py-3.5 rounded-xl font-bold hover:bg-slate-800 shadow-md mt-2">{submittingLead ? "Creating Account..." : "Submit & Create Account"}</button>
+                        {/* EMAIL */}
+                        <div>
+                            <label className="block text-xs font-bold text-slate-500 uppercase mb-1">Email Address</label>
+                            <div className="relative">
+                                <Mail className="absolute left-3 top-3 h-4 w-4 text-slate-400" />
+                                <input required type="email" className="w-full pl-9 p-3 bg-slate-50 border border-slate-200 rounded-lg outline-none focus:ring-2 focus:ring-indigo-500" value={leadForm.email} onChange={e => setLeadForm({...leadForm, email: e.target.value})} placeholder="jane@example.com" />
+                            </div>
+                        </div>
+
+                        {/* PHONE WITH FORMATTING */}
+                        <div>
+                            <label className="block text-xs font-bold text-slate-500 uppercase mb-1">Mobile Phone</label>
+                            <div className="relative">
+                                <Phone className="absolute left-3 top-3 h-4 w-4 text-slate-400" />
+                                <input required type="tel" className="w-full pl-9 p-3 bg-slate-50 border border-slate-200 rounded-lg outline-none focus:ring-2 focus:ring-indigo-500" value={leadForm.phone} onChange={handlePhoneChange} placeholder="(555) 123-1234" maxLength={14} />
+                            </div>
+                        </div>
+
+                        {/* PASSWORD FIELDS */}
+                        <div className="grid grid-cols-1 gap-4 pt-2">
+                            <div>
+                                <label className="block text-xs font-bold text-slate-500 uppercase mb-1">Create Password</label>
+                                <div className="relative">
+                                    <input required type={showPassword ? "text" : "password"} className="w-full p-3 bg-slate-50 border border-slate-200 rounded-lg outline-none focus:ring-2 focus:ring-indigo-500 pr-10" value={leadForm.password} onChange={e => setLeadForm({...leadForm, password: e.target.value})} minLength={6} placeholder="Min 6 characters" />
+                                    <button type="button" onClick={() => setShowPassword(!showPassword)} className="absolute right-3 top-3 text-slate-400 hover:text-slate-600">{showPassword ? <EyeOff className="h-5 w-5" /> : <Eye className="h-5 w-5" />}</button>
+                                </div>
+                            </div>
+                            <div>
+                                <label className="block text-xs font-bold text-slate-500 uppercase mb-1">Confirm Password</label>
+                                <input required type={showPassword ? "text" : "password"} className="w-full p-3 bg-slate-50 border border-slate-200 rounded-lg outline-none focus:ring-2 focus:ring-indigo-500" value={leadForm.confirmPassword} onChange={e => setLeadForm({...leadForm, confirmPassword: e.target.value})} placeholder="Retype password" />
+                            </div>
+                        </div>
+
+                        {/* REQUIREMENTS LIST */}
+                        <div className="text-[10px] text-slate-400 bg-slate-50 p-3 rounded-lg border border-slate-100">
+                            <p className="font-bold mb-1">Security Requirements:</p>
+                            <ul className="list-disc pl-3 space-y-0.5">
+                                <li className={leadForm.password.length >= 6 ? "text-emerald-600 font-bold" : ""}>At least 6 characters</li>
+                                <li className={/[A-Z]/.test(leadForm.password) ? "text-emerald-600 font-bold" : ""}>One uppercase letter</li>
+                                <li className={/[0-9]/.test(leadForm.password) ? "text-emerald-600 font-bold" : ""}>One number</li>
+                                <li className={leadForm.password === leadForm.confirmPassword && leadForm.password !== "" ? "text-emerald-600 font-bold" : ""}>Passwords must match</li>
+                            </ul>
+                        </div>
+
+                        {/* --- CONSENT CHECKBOX (Updated with Links & Opt-Out) --- */}
+                        <div className="pt-2">
+                            <label className="flex items-start gap-3 cursor-pointer group">
+                                <div className="relative flex items-center mt-0.5">
+                                    <input 
+                                        type="checkbox" 
+                                        className="peer h-5 w-5 cursor-pointer appearance-none rounded-md border-2 border-slate-300 transition-all checked:border-indigo-600 checked:bg-indigo-600 hover:border-indigo-400 shrink-0"
+                                        checked={agreedToTerms}
+                                        onChange={(e) => setAgreedToTerms(e.target.checked)}
+                                    />
+                                    <Check className="absolute left-1/2 top-1/2 h-3.5 w-3.5 -translate-x-1/2 -translate-y-1/2 text-white opacity-0 transition-opacity peer-checked:opacity-100 pointer-events-none" />
+                                </div>
+                                <div className="text-[11px] text-slate-500 leading-snug">
+                                    I agree to the{' '}
+                                    <Link href="/terms" target="_blank" className="font-bold text-indigo-600 hover:underline">
+                                        Terms
+                                    </Link>
+                                    {' & '}
+                                    <Link href="/privacy" target="_blank" className="font-bold text-indigo-600 hover:underline">
+                                        Privacy Policy
+                                    </Link>
+                                    . I verify that this is my number and consent to receive calls, emails, and SMS text messages from DermTrials and participating research sites regarding this study and future clinical trial opportunities. I understand that these messages may be sent using automated technology, but <strong>I can opt-out at any time</strong>. Message/data rates may apply.
+                                </div>
+                            </label>
+                        </div>
+
+                        <button 
+                            type="submit" 
+                            disabled={submittingLead || !agreedToTerms} 
+                            className="w-full bg-slate-900 text-white py-3.5 rounded-xl font-bold hover:bg-slate-800 shadow-md mt-2 transition-all transform hover:-translate-y-0.5 disabled:opacity-50 disabled:cursor-not-allowed disabled:transform-none"
+                        >
+                            {submittingLead ? "Creating Account..." : "Submit & Create Account"}
+                        </button>
                       </form>
                     </div>
                   )}
+
                   {screenerStep === 'success' && (
                     <div className="text-center py-8">
                       <div className="w-20 h-20 bg-emerald-100 text-emerald-600 rounded-full flex items-center justify-center mx-auto mb-6"><Check className="h-10 w-10" /></div>
-                      <h3 className="text-2xl font-bold text-slate-900 mb-2">Account Created!</h3>
+                      <h3 className="text-2xl font-bold text-slate-900 mb-2">{currentUser ? "Application Submitted!" : "Account Created!"}</h3>
                       <p className="text-slate-500 text-sm mb-6">Redirecting you to your patient dashboard...</p>
                       <Loader2 className="h-6 w-6 animate-spin text-emerald-500 mx-auto" />
                     </div>
@@ -325,7 +496,145 @@ export default function TrialClientLogic({ trial, sidebarMode = false }: { trial
           )}
         </div>
       </details>
-      {/* (Other details tags same as before...) */}
+
+      {/* 2. Study Design */}
+      <details className="group bg-white rounded-xl shadow-sm border border-slate-200 overflow-hidden">
+        <summary className="flex items-center justify-between p-6 cursor-pointer list-none hover:bg-slate-50 transition-colors">
+          <h3 className="text-lg font-bold text-slate-900 flex items-center gap-2"><FlaskConical className="h-5 w-5 text-indigo-600" /> Study Design</h3>
+          <ChevronDown className="h-5 w-5 text-slate-400 group-open:rotate-180 transition-transform" />
+        </summary>
+        <div className="px-6 pb-6 border-t border-slate-100 pt-6">
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-6">
+            <div><h4 className="text-xs font-bold text-slate-400 uppercase tracking-wider mb-1">Study Type</h4><p className="text-sm font-semibold text-slate-800">{trial.study_type || "N/A"}</p></div>
+            <div><h4 className="text-xs font-bold text-slate-400 uppercase tracking-wider mb-1">Phase</h4><p className="text-sm font-semibold text-slate-800">{trial.phase || "N/A"}</p></div>
+            {studyDesign?.allocation && <div><h4 className="text-xs font-bold text-slate-400 uppercase tracking-wider mb-1">Allocation</h4><p className="text-sm font-semibold text-slate-800">{studyDesign.allocation}</p></div>}
+            {studyDesign?.intervention_model && <div><h4 className="text-xs font-bold text-slate-400 uppercase tracking-wider mb-1">Model</h4><p className="text-sm font-semibold text-slate-800">{studyDesign.intervention_model}</p></div>}
+            {studyDesign?.primary_purpose && <div><h4 className="text-xs font-bold text-slate-400 uppercase tracking-wider mb-1">Primary Purpose</h4><p className="text-sm font-semibold text-slate-800">{studyDesign.primary_purpose}</p></div>}
+            {studyDesign?.masking && <div><h4 className="text-xs font-bold text-slate-400 uppercase tracking-wider mb-1">Masking</h4><p className="text-sm font-semibold text-slate-800">{studyDesign.masking}</p></div>}
+          </div>
+        </div>
+      </details>
+
+      {/* 3. Arms & Interventions */}
+      {interventions.length > 0 && (
+        <details className="group bg-white rounded-xl shadow-sm border border-slate-200 overflow-hidden">
+          <summary className="flex items-center justify-between p-6 cursor-pointer list-none hover:bg-slate-50 transition-colors">
+            <h3 className="text-lg font-bold text-slate-900 flex items-center gap-2"><Syringe className="h-5 w-5 text-indigo-600" /> Arms & Interventions</h3>
+            <ChevronDown className="h-5 w-5 text-slate-400 group-open:rotate-180 transition-transform" />
+          </summary>
+          <div className="border-t border-slate-100">
+            {/* Header (Desktop) */}
+            <div className="hidden md:grid grid-cols-2 bg-slate-50 border-b border-slate-100 text-xs font-bold text-slate-500 uppercase tracking-wider">
+               <div className="px-6 py-3 border-r border-slate-100">Participant Group/Arm</div>
+               <div className="px-6 py-3">Intervention/Treatment</div>
+            </div>
+            
+            {/* Rows */}
+            <div className="divide-y divide-slate-100">
+              {interventions.map((arm: any, idx: number) => (
+                <div key={idx} className="grid grid-cols-1 md:grid-cols-2">
+                  {/* Left Column: Arm Info */}
+                  <div className="p-6 border-b md:border-b-0 md:border-r border-slate-100 bg-white">
+                    <span className="inline-block text-xs font-bold bg-slate-100 text-slate-600 px-2 py-1 rounded uppercase tracking-wide mb-2 border border-slate-200">
+                      {arm.role ? arm.role.replace('_', ' ') : "Arm"}
+                    </span>
+                    <p className="text-sm text-slate-800 leading-relaxed font-medium">{arm.description || "No description available."}</p>
+                  </div>
+
+                  {/* Right Column: Interventions List */}
+                  <div className="p-6 bg-white space-y-6">
+                    {arm.interventions?.map((item: any, i: number) => (
+                      <div key={i} className="flex flex-col gap-1">
+                        <div className="flex items-center gap-2 flex-wrap">
+                           <span className="text-xs font-bold text-indigo-600 bg-indigo-50 px-2 py-0.5 rounded border border-indigo-100 uppercase">{item.type}</span>
+                           <span className="font-bold text-slate-900 text-sm">{item.name}</span>
+                        </div>
+                        {item.description && <p className="text-sm text-slate-600 ml-1 leading-relaxed">• {item.description}</p>}
+                        {item.otherNames && item.otherNames.length > 0 && (
+                           <div className="ml-1 mt-1 text-xs text-slate-500">
+                             <span className="font-bold text-slate-400 mr-1">• Other Names:</span> 
+                             <span className="font-mono text-slate-600">{item.otherNames.join(', ')}</span>
+                           </div>
+                        )}
+                      </div>
+                    ))}
+                    {(!arm.interventions || arm.interventions.length === 0) && <p className="text-sm text-slate-400 italic">No specific interventions listed.</p>}
+                  </div>
+                </div>
+              ))}
+            </div>
+          </div>
+        </details>
+      )}
+
+      {/* 4. Outcome Measures */}
+      {(primaryOutcomes.length > 0 || secondaryOutcomes.length > 0) && (
+        <details className="group bg-white rounded-xl shadow-sm border border-slate-200 overflow-hidden">
+          <summary className="flex items-center justify-between p-6 cursor-pointer list-none hover:bg-slate-50 transition-colors">
+            <h3 className="text-lg font-bold text-slate-900 flex items-center gap-2"><Target className="h-5 w-5 text-indigo-600" /> Outcome Measures</h3>
+            <ChevronDown className="h-5 w-5 text-slate-400 group-open:rotate-180 transition-transform" />
+          </summary>
+          <div className="px-6 pb-6 border-t border-slate-100 pt-6 space-y-8">
+            {primaryOutcomes.length > 0 && (
+              <div>
+                <h4 className="text-xs font-bold text-emerald-600 uppercase tracking-wider mb-4 flex items-center gap-2"><CheckCircle2 className="h-3 w-3" /> Primary Outcomes</h4>
+                <div className="space-y-4">
+                  {primaryOutcomes.map((o: any, idx: number) => (
+                    <div key={idx} className="bg-emerald-50/20 p-5 rounded-xl border border-emerald-100/50 flex flex-col md:flex-row gap-6">
+                        <div className="md:w-1/3">
+                            <p className="font-bold text-slate-900 text-sm leading-snug">{o.measure}</p>
+                            {o.timeFrame && (
+                                <div className="mt-3 inline-flex items-center gap-1.5 px-2.5 py-1 rounded-md bg-white border border-emerald-100 text-xs font-bold text-emerald-700 shadow-sm">
+                                    <Clock className="h-3 w-3" /> {o.timeFrame}
+                                </div>
+                            )}
+                        </div>
+                        <div className="md:w-2/3 border-t md:border-t-0 md:border-l border-emerald-100/50 pt-4 md:pt-0 md:pl-6">
+                            <p className="text-sm text-slate-600 leading-relaxed">{o.description || "No further description provided."}</p>
+                        </div>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            )}
+            {secondaryOutcomes.length > 0 && (
+              <div>
+                <h4 className="text-xs font-bold text-slate-400 uppercase tracking-wider mb-4 border-t border-slate-100 pt-6">Secondary Outcomes</h4>
+                <div className="space-y-4">
+                  {secondaryOutcomes.map((o: any, idx: number) => (
+                    <div key={idx} className="p-5 rounded-xl border border-slate-100 hover:border-slate-200 transition-colors flex flex-col md:flex-row gap-6">
+                        <div className="md:w-1/3">
+                            <p className="font-bold text-slate-800 text-sm leading-snug">{o.measure}</p>
+                            {o.timeFrame && (
+                                <div className="mt-3 inline-flex items-center gap-1.5 px-2.5 py-1 rounded-md bg-slate-50 border border-slate-200 text-xs font-bold text-slate-600">
+                                    <Clock className="h-3 w-3" /> {o.timeFrame}
+                                </div>
+                            )}
+                        </div>
+                        <div className="md:w-2/3 border-t md:border-t-0 md:border-l border-slate-100 pt-4 md:pt-0 md:pl-6">
+                            <p className="text-sm text-slate-500 leading-relaxed">{o.description || "No further description provided."}</p>
+                        </div>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            )}
+          </div>
+        </details>
+      )}
+
+      {/* 5. Criteria */}
+      <details className="group bg-white rounded-xl shadow-sm border border-slate-200 overflow-hidden">
+        <summary className="flex items-center justify-between p-6 cursor-pointer list-none hover:bg-slate-50 transition-colors">
+          <h3 className="text-lg font-bold text-slate-900 flex items-center gap-2"><ClipboardCheck className="h-5 w-5 text-indigo-600" /> Eligibility Criteria</h3>
+          <ChevronDown className="h-5 w-5 text-slate-400 group-open:rotate-180 transition-transform" />
+        </summary>
+        <div className="px-6 pb-6 border-t border-slate-100 pt-6">
+          <div className="bg-slate-50 p-4 rounded-lg border border-slate-200 text-sm text-slate-700 font-mono leading-relaxed whitespace-pre-wrap max-h-96 overflow-y-auto">
+            {trial.inclusion_criteria || "No criteria listed."}
+          </div>
+        </div>
+      </details>
     </div>
   );
 }

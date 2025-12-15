@@ -12,7 +12,8 @@ import {
   MoreHorizontal, UserCheck, XCircle, ArrowRight, Calculator, 
   AlertTriangle, AlertCircle, Send, History, BarChart3, PieChart,
   Activity, MousePointerClick, FileEdit, Archive, CheckCheck,
-  Eye, MousePointer2, Percent, DollarSign
+  Eye, MousePointer2, Percent, DollarSign, HelpCircle,
+  Gem, Medal, Shield, PenSquare, Info
 } from 'lucide-react';
 import Link from 'next/link';
 
@@ -21,6 +22,7 @@ const SHOW_ANALYTICS_LIVE = true;
 
 // --- TYPES ---
 type LeadStatus = 'New' | 'Contacted' | 'Scheduled' | 'Enrolled' | 'Not Eligible' | 'Withdrawn';
+type TierType = 'diamond' | 'gold' | 'silver' | 'mismatch';
 
 // --- HELPER COMPONENTS ---
 const LockedOverlay = ({ title, desc }: { title: string, desc: string }) => (
@@ -33,6 +35,16 @@ const LockedOverlay = ({ title, desc }: { title: string, desc: string }) => (
       </div>
   </div>
 );
+
+// --- FUZZY MATCHER (Shared with Admin) ---
+const isSameLocation = (leadCity: string, leadState: string, claimCity: string, claimState: string) => {
+    const clean = (str: string) => (str || "").toLowerCase().trim().replace(/[^a-z]/g, "");
+    const lCity = clean(leadCity);
+    const cCity = clean(claimCity);
+    // Strict City Match (Ignore State if City matches)
+    if (lCity && cCity && lCity === cCity) return true;
+    return false;
+};
 
 export default function StudyManager() {
   const params = useParams(); 
@@ -60,18 +72,21 @@ export default function StudyManager() {
   const [selectedLeadId, setSelectedLeadId] = useState<string | null>(null);
   const [noteBuffer, setNoteBuffer] = useState("");
   const [searchTerm, setSearchTerm] = useState("");
+  const [tierFilter, setTierFilter] = useState<'all' | TierType>('all'); 
   
   // Drawer Internal State
   const [drawerTab, setDrawerTab] = useState<'overview' | 'messages' | 'history'>('overview');
   const [messageInput, setMessageInput] = useState("");
   const [historyLogs, setHistoryLogs] = useState<any[]>([]); 
   const [messages, setMessages] = useState<any[]>([]); 
+  
+  // Question Editing State (Resolve Unsure)
+  const [editingAnswerIndex, setEditingAnswerIndex] = useState<number | null>(null);
+  const [tempAnswer, setTempAnswer] = useState("");
 
   // Modals & UI
   const [isSaving, setIsSaving] = useState(false);
   const [showToast, setShowToast] = useState(false);
-  const [isDeleteModalOpen, setIsDeleteModalOpen] = useState(false);
-  const [isDeleting, setIsDeleting] = useState(false);
 
   // Scroll Ref for Chat
   const chatContainerRef = useRef<HTMLDivElement>(null);
@@ -92,21 +107,44 @@ export default function StudyManager() {
     }
 
     async function fetchData() {
+      console.log("🔍 [Researcher] Loading Pipeline...");
       const { data: { user } } = await supabase.auth.getUser();
       if (!user) { router.push('/login'); return; }
 
+      // 1. Get Profile
       const { data: profileData } = await supabase.from('researcher_profiles').select('*').eq('user_id', user.id).single();
-      if (!profileData) return;
+      if (!profileData) { console.error("❌ No Profile Found"); return; }
       setProfile(profileData);
       setTier(profileData.tier || 'free');
 
-      const { data: claimData } = await supabase.from('claimed_trials').select('*').eq('nct_id', params.nct_id).eq('researcher_id', profileData.id).single();
-      if (!claimData) { router.push('/dashboard/researcher'); return; }
+      // --- CRITICAL FIX: CLEAN THE ID ---
+      // This ensures we don't fail due to hidden spaces or URL encoding
+      const rawId = Array.isArray(params.nct_id) ? params.nct_id[0] : params.nct_id;
+      const cleanId = decodeURIComponent(rawId).trim();
+      
+      console.log(`🔎 Seeking Claim for: "${cleanId}" (Researcher: ${profileData.id})`);
+
+      // 2. Get Claim (SAFE CHECK)
+      const { data: claimData, error: claimError } = await supabase
+        .from('claimed_trials')
+        .select('*')
+        .eq('nct_id', cleanId) // Use cleaned ID
+        .eq('researcher_id', profileData.id)
+        .single();
+      
+      if (claimError || !claimData) { 
+          console.error("❌ Claim Verification Failed:", claimError);
+          // Don't auto-redirect immediately so you can see the error in console
+          // router.push('/dashboard/researcher'); 
+          return; 
+      }
       setClaim(claimData);
 
-      const { data: trialData } = await supabase.from('trials').select('*').eq('nct_id', params.nct_id).single();
+      // 3. Get Trial Data
+      const { data: trialData } = await supabase.from('trials').select('*').eq('nct_id', cleanId).single();
       setTrial(trialData);
 
+      // 4. Set Defaults
       setCustomSummary(claimData.custom_brief_summary || trialData.simple_summary || trialData.brief_summary || "");
       setQuestions(claimData.custom_screener_questions || trialData.screener_questions || []);
       setVideoUrl(claimData.video_url || "");
@@ -114,36 +152,38 @@ export default function StudyManager() {
       setPhotos(claimData.facility_photos || []);
 
       if (claimData.status === 'approved') {
-          // 1. Fetch Leads
-          const { data: leadsData } = await supabase
+          // 5. ROBUST LEAD FETCHING
+          const { data: allLeads } = await supabase
             .from('leads')
             .select('*')
-            .eq('trial_id', params.nct_id)
-            .eq('site_city', claimData.site_location?.city)
-            .eq('site_state', claimData.site_location?.state)
+            .eq('trial_id', cleanId)
             .order('created_at', { ascending: false });
 
-          if (leadsData) {
-              // 2. Fetch Unread Counts for these leads
-              const leadIds = leadsData.map(l => l.id);
-              if (leadIds.length > 0) {
-                  const { data: unreadMessages } = await supabase
-                      .from('messages')
-                      .select('lead_id')
-                      .eq('is_read', false)
-                      .eq('sender_role', 'patient')
-                      .in('lead_id', leadIds);
+          if (allLeads) {
+             // Filter in Memory using Fuzzy Match
+             const myLeads = allLeads.filter(l => 
+                 isSameLocation(l.site_city, l.site_state, claimData.site_location?.city, claimData.site_location?.state)
+             );
 
-                  // 3. Merge Counts into Leads
-                  const leadsWithCounts = leadsData.map(lead => ({
-                      ...lead,
-                      unread_count: unreadMessages?.filter(m => m.lead_id === lead.id).length || 0
-                  }));
-                  
-                  setLeads(leadsWithCounts);
-              } else {
-                  setLeads([]);
-              }
+             // 6. Fetch Unread Counts
+             const leadIds = myLeads.map(l => l.id);
+             if (leadIds.length > 0) {
+                 const { data: unreadMessages } = await supabase
+                     .from('messages')
+                     .select('lead_id')
+                     .eq('is_read', false)
+                     .eq('sender_role', 'patient')
+                     .in('lead_id', leadIds);
+
+                 const leadsWithCounts = myLeads.map(lead => ({
+                     ...lead,
+                     unread_count: unreadMessages?.filter(m => m.lead_id === lead.id).length || 0
+                 }));
+                 
+                 setLeads(leadsWithCounts);
+             } else {
+                 setLeads([]);
+             }
           }
       }
       setLoading(false);
@@ -193,22 +233,18 @@ export default function StudyManager() {
       };
   }, [leads, questions]);
 
-  // --- REALTIME LISTENER (THE FIX IS HERE) ---
+  // --- REALTIME LISTENER ---
   useEffect(() => {
       const channel = supabase
           .channel('researcher-dashboard-channel')
-          // 1. Listen for LEAD CHANGES (e.g. Admin moves card)
           .on('postgres_changes', { event: 'UPDATE', schema: 'public', table: 'leads' }, (payload) => {
               setLeads(prev => prev.map(l => l.id === payload.new.id ? { ...l, ...payload.new } : l));
           })
-          // 2. Listen for NEW MESSAGES
           .on('postgres_changes', { event: 'INSERT', schema: 'public', table: 'messages' }, (payload) => {
               if (payload.new.sender_role === 'patient') {
                   if (selectedLeadId !== payload.new.lead_id) {
-                      // Increment badge if chat closed
                       setLeads(prev => prev.map(l => l.id === payload.new.lead_id ? { ...l, unread_count: (l.unread_count || 0) + 1 } : l));
                   } else {
-                      // Append msg if chat open
                       setMessages(prev => [...prev, payload.new]);
                       supabase.from('messages').update({ is_read: true }).eq('id', payload.new.id);
                   }
@@ -238,7 +274,6 @@ export default function StudyManager() {
     fetchDrawerData();
   }, [selectedLeadId, drawerTab]);
 
-  // --- SCROLL LOGIC ---
   useEffect(() => {
       if (drawerTab === 'messages' && chatContainerRef.current) {
           setTimeout(() => {
@@ -318,6 +353,44 @@ export default function StudyManager() {
     }
   };
 
+  // --- HELPER: NORMALIZE ANSWER (FIX FOR "I don't know" BUG) ---
+  const options = ["Yes", "No", "I don't know"];
+  const normalizeAnswer = (val: string) => {
+      if (!val) return "Yes"; 
+      const match = options.find(o => o.toLowerCase() === val.toLowerCase());
+      return match || "Yes"; 
+  };
+
+  // --- NEW: UPDATE LEAD ANSWER (RESOLVE UNSURE) ---
+  const updateLeadAnswer = async (index: number, newAnswer: string) => {
+      if (!selectedLead) return;
+      
+      // FIX: Rebuild the array based on the Question List to ensure structure
+      const newAnswers = questions.map((_, i) => {
+          if (i === index) return newAnswer;
+          if (selectedLead.answers && selectedLead.answers[i] !== undefined) {
+              return selectedLead.answers[i];
+          }
+          return null; 
+      });
+
+      const oldAnswer = (selectedLead.answers && selectedLead.answers[index]) || "N/A";
+
+      // 1. Optimistic Update
+      setLeads(prev => prev.map(l => l.id === selectedLead.id ? { ...l, answers: newAnswers } : l));
+      setEditingAnswerIndex(null);
+
+      // 2. DB Update
+      const { error } = await supabase.from('leads').update({ answers: newAnswers }).eq('id', selectedLead.id);
+      
+      if (error) {
+          alert("Failed to update answer.");
+          setLeads(prev => prev.map(l => l.id === selectedLead.id ? { ...l, answers: selectedLead.answers } : l));
+      } else {
+          recordAction("Data Correction", `Changed Q${index + 1} from "${oldAnswer}" to "${newAnswer}"`);
+      }
+  };
+
   const saveNote = async () => {
     if (!selectedLead) return;
     const oldNote = selectedLead.researcher_notes || "";
@@ -351,21 +424,6 @@ export default function StudyManager() {
     recordAction("Message Sent", "Outbound message to patient portal.");
   };
 
-  const triggerDelete = () => setIsDeleteModalOpen(true);
-
-  const confirmDeleteLead = async () => {
-    if (!selectedLead) return;
-    setIsDeleting(true);
-    const { error } = await supabase.from('leads').delete().eq('id', selectedLead.id);
-    if (error) { alert("Error deleting: " + error.message); } 
-    else {
-        setLeads(prev => prev.filter(l => l.id !== selectedLead.id));
-        setSelectedLeadId(null); 
-        setIsDeleteModalOpen(false);
-    }
-    setIsDeleting(false);
-  };
-
   const saveSettings = async () => {
     setIsSaving(true);
     const { error } = await supabase.from('claimed_trials').update({ 
@@ -384,13 +442,48 @@ export default function StudyManager() {
     return new Date(dateStr).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
   };
 
+  // --- TIER CALCULATION HELPER (GENEROUS LOGIC) ---
+  const getLeadTier = (lead: any): { label: string, icon: any, style: string, type: TierType } | null => {
+    if (!questions || questions.length === 0) return null;
+    
+    let wrong = 0;
+    let unsure = 0;
+    const total = questions.length;
+    
+    questions.forEach((q: any, i: number) => {
+        const ans = lead.answers && lead.answers[i];
+        if (ans !== q.correct_answer) {
+             if (ans && (ans.toLowerCase().includes("know") || ans.toLowerCase().includes("unsure"))) {
+                 unsure++;
+             } else {
+                 wrong++;
+             }
+        }
+    });
+
+    const mismatchRate = wrong / total;
+
+    if (wrong === 0 && unsure === 0) return { label: "Perfect Match", icon: Gem, style: "bg-emerald-50 text-emerald-700 border-emerald-100", type: 'diamond' };
+    if (wrong === 0) return { label: "Likely Match", icon: Medal, style: "bg-amber-50 text-amber-700 border-amber-100", type: 'gold' };
+    if (mismatchRate <= 0.20) return { label: "Needs Review", icon: Shield, style: "bg-slate-100 text-slate-600 border-slate-200", type: 'silver' };
+    
+    return { label: "Potential Mismatch", icon: AlertCircle, style: "bg-rose-50 text-rose-700 border-rose-100", type: 'mismatch' };
+  };
+
   // --- KANBAN COLUMN COMPONENT ---
   const StatusColumn = ({ status, label, icon: Icon, colorClass }: any) => {
     const columnLeads = leads.filter(l => {
-        if (status === 'Not Eligible') {
-            return (l.site_status === 'Not Eligible' || l.site_status === 'Withdrawn') && l.name.toLowerCase().includes(searchTerm.toLowerCase());
-        }
-        return (l.site_status || 'New') === status && l.name.toLowerCase().includes(searchTerm.toLowerCase());
+        const matchesStatus = status === 'Not Eligible' 
+            ? (l.site_status === 'Not Eligible' || l.site_status === 'Withdrawn')
+            : (l.site_status || 'New') === status;
+        
+        const matchesSearch = l.name.toLowerCase().includes(searchTerm.toLowerCase());
+        
+        // --- NEW FILTER LOGIC ---
+        const tier = getLeadTier(l);
+        const matchesTier = tierFilter === 'all' || tier?.type === tierFilter;
+
+        return matchesStatus && matchesSearch && matchesTier;
     });
 
     return (
@@ -403,24 +496,38 @@ export default function StudyManager() {
                 <span className="text-[10px] font-bold bg-white px-2 py-0.5 rounded text-slate-500 shadow-sm">{columnLeads.length}</span>
             </div>
             <div className="flex-1 overflow-y-auto p-3 space-y-3">
-                {columnLeads.map(lead => (
-                    <div key={lead.id} onClick={() => { setSelectedLeadId(lead.id); setNoteBuffer(lead.researcher_notes || ""); setDrawerTab('overview'); }} className={`bg-white p-4 rounded-xl shadow-sm border transition-all cursor-pointer hover:shadow-md group ${selectedLeadId === lead.id ? 'border-indigo-600 ring-1 ring-indigo-600' : 'border-slate-200 hover:border-indigo-300'} relative`}>
-                        <div className="flex justify-between items-start mb-2"><h4 className="font-bold text-slate-900 text-sm">{lead.name}</h4>{lead.status?.includes('Strong') && <Crown className="h-3 w-3 text-amber-500" />}</div>
-                        <div className="text-xs text-slate-500 mb-3 line-clamp-1">{lead.email}</div>
-                        <div className="flex items-center justify-between text-[10px] text-slate-400">
-                            <span className="flex items-center gap-1"><Calendar className="h-3 w-3" /> {new Date(lead.created_at).toLocaleDateString()}</span>
-                            {lead.site_status === 'Withdrawn' && <span className="text-[10px] font-bold text-slate-500 bg-slate-200 px-1.5 py-0.5 rounded">Withdrawn</span>}
-                            {lead.site_status === 'Not Eligible' && <span className="text-[10px] font-bold text-red-500 bg-red-50 px-1.5 py-0.5 rounded">Ineligible</span>}
-                            <ChevronDown className="h-3 w-3 opacity-0 group-hover:opacity-100 transition-opacity" />
-                        </div>
-                        {/* UNREAD BADGE */}
-                        {lead.unread_count > 0 && (
-                            <div className="absolute bottom-2 right-2 bg-red-500 text-white text-[10px] font-bold px-2 py-0.5 rounded-full shadow-md z-10 animate-in zoom-in">
-                                {lead.unread_count} Unread
+                {columnLeads.map(lead => {
+                    const tier = getLeadTier(lead);
+                    const TierIcon = tier?.icon || HelpCircle;
+
+                    return (
+                        <div key={lead.id} onClick={() => { setSelectedLeadId(lead.id); setNoteBuffer(lead.researcher_notes || ""); setDrawerTab('overview'); }} className={`bg-white p-4 rounded-xl shadow-sm border transition-all cursor-pointer hover:shadow-md group ${selectedLeadId === lead.id ? 'border-indigo-600 ring-1 ring-indigo-600' : 'border-slate-200 hover:border-indigo-300'} relative`}>
+                            
+                            <div className="flex justify-between items-start mb-2">
+                                <h4 className="font-bold text-slate-900 text-sm">{lead.name}</h4>
+                                {tier && (
+                                    <div className={`flex items-center gap-1 px-1.5 py-0.5 rounded text-[9px] font-bold uppercase tracking-wide border ${tier.style}`}>
+                                        <TierIcon className="h-3 w-3" />
+                                        {tier.label}
+                                    </div>
+                                )}
                             </div>
-                        )}
-                    </div>
-                ))}
+
+                            <div className="text-xs text-slate-500 mb-3 line-clamp-1">{lead.email}</div>
+                            <div className="flex items-center justify-between text-[10px] text-slate-400">
+                                <span className="flex items-center gap-1"><Calendar className="h-3 w-3" /> {new Date(lead.created_at).toLocaleDateString()}</span>
+                                {lead.site_status === 'Withdrawn' && <span className="text-[10px] font-bold text-slate-500 bg-slate-200 px-1.5 py-0.5 rounded">Withdrawn</span>}
+                                {lead.site_status === 'Not Eligible' && <span className="text-[10px] font-bold text-red-500 bg-red-50 px-1.5 py-0.5 rounded">Ineligible</span>}
+                                <ChevronDown className="h-3 w-3 opacity-0 group-hover:opacity-100 transition-opacity" />
+                            </div>
+                            {lead.unread_count > 0 && (
+                                <div className="absolute bottom-2 right-2 bg-red-500 text-white text-[10px] font-bold px-2 py-0.5 rounded-full shadow-md z-10 animate-in zoom-in">
+                                    {lead.unread_count} Unread
+                                </div>
+                            )}
+                        </div>
+                    );
+                })}
                 {columnLeads.length === 0 && <div className="text-center py-10 opacity-30 text-xs font-bold text-slate-400 uppercase">No Candidates</div>}
             </div>
         </div>
@@ -430,16 +537,33 @@ export default function StudyManager() {
   if (loading) return <div className="min-h-screen flex items-center justify-center"><Loader2 className="h-8 w-8 animate-spin text-indigo-600" /></div>;
   if (claim?.status !== 'approved') return <div className="p-10 text-center">Verification Pending.</div>; 
 
+  // --- ROBUST SCORING LOGIC (CASE INSENSITIVE) ---
   const calculateMatchScore = () => {
-    if (!selectedLead || !trial.screener_questions) return { count: 0, total: 0 };
-    const total = trial.screener_questions.length;
-    const count = trial.screener_questions.reduce((acc: number, q: any, i: number) => { return acc + (selectedLead.answers && selectedLead.answers[i] === q.correct_answer ? 1 : 0); }, 0);
-    return { count, total };
+    if (!selectedLead || !questions || questions.length === 0) return { count: 0, unsure: 0, total: 0 };
+    const total = questions.length;
+    let count = 0;
+    let unsure = 0;
+    let wrong = 0;
+    
+    questions.forEach((q: any, i: number) => {
+        const ans = selectedLead.answers && selectedLead.answers[i];
+        
+        // Exact match (Good)
+        if (ans === q.correct_answer) {
+            count++;
+        } 
+        // Fuzzy match for Unsure (e.g. "I don't know", "unsure", "idk")
+        else if (ans && (ans.toLowerCase().includes("know") || ans.toLowerCase().includes("unsure"))) {
+            unsure++;
+        } else {
+            wrong++;
+        }
+    });
+    
+    return { count, unsure, wrong, total };
   };
   const matchScore = calculateMatchScore();
-  const missedCount = matchScore.total - matchScore.count;
 
-  // --- PREPARE SORTED HISTORY ---
   const getSortedHistory = () => {
       if (!selectedLead) return [];
       const appLog = { id: 'init', action: 'Application Received', detail: 'Patient submitted screening questionnaire.', performed_by: 'System', created_at: selectedLead.created_at };
@@ -477,8 +601,31 @@ export default function StudyManager() {
             <>
                 <div className="flex-1 flex flex-col min-w-0">
                     <div className="h-14 border-b border-slate-200 bg-white/50 backdrop-blur-sm flex items-center px-6 justify-between flex-shrink-0">
-                        <div className="relative w-64"><Search className="absolute left-3 top-2.5 h-4 w-4 text-slate-400" /><input type="text" placeholder="Search patients..." className="w-full pl-9 pr-4 py-2 bg-slate-100 border-transparent rounded-lg text-xs font-bold focus:bg-white focus:ring-2 focus:ring-indigo-500 focus:border-transparent transition-all outline-none" value={searchTerm} onChange={e => setSearchTerm(e.target.value)} /></div>
-                        <div className="flex items-center gap-2 text-xs text-slate-500 font-bold"><Filter className="h-4 w-4" /> <span>All Candidates ({leads.length})</span></div>
+                        {/* SEARCH BAR */}
+                        <div className="relative w-64 mr-4"><Search className="absolute left-3 top-2.5 h-4 w-4 text-slate-400" /><input type="text" placeholder="Search patients..." className="w-full pl-9 pr-4 py-2 bg-slate-100 border-transparent rounded-lg text-xs font-bold focus:bg-white focus:ring-2 focus:ring-indigo-500 focus:border-transparent transition-all outline-none" value={searchTerm} onChange={e => setSearchTerm(e.target.value)} /></div>
+                        
+                        {/* NEW: TIER FILTERS */}
+                        <div className="flex items-center gap-2 flex-1">
+                            <span className="text-[10px] font-bold text-slate-400 uppercase tracking-wide mr-2 flex items-center gap-1"><Filter className="h-3 w-3" /> Filter:</span>
+                            {[
+                                { id: 'all', label: 'All', icon: Users, color: 'text-slate-600' },
+                                { id: 'diamond', label: 'Perfect', icon: Gem, color: 'text-emerald-600' },
+                                { id: 'gold', label: 'Likely', icon: Medal, color: 'text-amber-600' },
+                                { id: 'silver', label: 'Review', icon: Shield, color: 'text-slate-600' },
+                                { id: 'mismatch', label: 'Mismatch', icon: AlertCircle, color: 'text-rose-600' },
+                            ].map((f: any) => (
+                                <button 
+                                    key={f.id}
+                                    onClick={() => setTierFilter(f.id)}
+                                    className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-bold transition-all ${tierFilter === f.id ? 'bg-white shadow-sm ring-1 ring-slate-200' : 'text-slate-400 hover:text-slate-600 hover:bg-slate-100'}`}
+                                >
+                                    <f.icon className={`h-3 w-3 ${tierFilter === f.id ? f.color : ''}`} />
+                                    {f.label}
+                                </button>
+                            ))}
+                        </div>
+
+                        <div className="flex items-center gap-2 text-xs text-slate-500 font-bold ml-auto"><span>Total: {leads.length}</span></div>
                     </div>
                     <div className="flex-1 overflow-x-auto overflow-y-hidden p-6">
                         <div className="flex h-full gap-6">
@@ -491,12 +638,32 @@ export default function StudyManager() {
                     </div>
                 </div>
 
+                {/* SIDE PANEL */}
                 {selectedLead && (
                     <div className="w-[600px] border-l border-slate-200 bg-white flex flex-col h-full shadow-2xl z-20 transition-all duration-300">
+                        {/* SIDE PANEL HEADER */}
                         <div className="h-16 border-b border-slate-100 flex items-center justify-between px-6 flex-shrink-0 bg-slate-50/50">
-                            <div><h2 className="font-bold text-slate-900 text-lg">{selectedLead.name}</h2><div className="flex items-center gap-2 mt-0.5"><span className="text-[10px] text-slate-400 uppercase font-bold tracking-wider">ID: {String(selectedLead.id).slice(0,8)}</span><span className={`px-2 py-0.5 rounded text-[10px] font-bold uppercase tracking-wide ${selectedLead.status?.includes('Strong') ? 'bg-emerald-100 text-emerald-700' : 'bg-slate-100 text-slate-600'}`}>{selectedLead.status || 'Standard'}</span></div></div>
+                            <div>
+                                <h2 className="font-bold text-slate-900 text-lg">{selectedLead.name}</h2>
+                                <div className="flex items-center gap-2 mt-0.5">
+                                    <span className="text-[10px] text-slate-400 uppercase font-bold tracking-wider">ID: {String(selectedLead.id).slice(0,8)}</span>
+                                    
+                                    {/* DYNAMIC TIER BADGE IN SIDE PANEL */}
+                                    {(() => {
+                                        const tier = getLeadTier(selectedLead);
+                                        const TierIcon = tier?.icon || HelpCircle;
+                                        return tier ? (
+                                            <div className={`flex items-center gap-1 px-2 py-0.5 rounded text-[10px] font-bold uppercase tracking-wide border ${tier.style}`}>
+                                                <TierIcon className="h-3 w-3" />
+                                                {tier.label}
+                                            </div>
+                                        ) : null;
+                                    })()}
+                                </div>
+                            </div>
                             <div className="flex items-center gap-2"><button onClick={() => setSelectedLeadId(null)} className="p-2 hover:bg-slate-200 rounded-full text-slate-400 transition-colors"><X className="h-5 w-5" /></button></div>
                         </div>
+
                         <div className="flex border-b border-slate-200 px-6">
                             <button onClick={() => setDrawerTab('overview')} className={`pb-3 pt-3 text-xs font-bold border-b-2 transition-colors flex items-center gap-2 mr-6 ${drawerTab === 'overview' ? 'border-indigo-600 text-indigo-600' : 'border-transparent text-slate-400 hover:text-slate-600'}`}><ClipboardList className="h-4 w-4" /> Overview</button>
                             <button onClick={() => setDrawerTab('messages')} className={`pb-3 pt-3 text-xs font-bold border-b-2 transition-colors flex items-center gap-2 mr-6 ${drawerTab === 'messages' ? 'border-indigo-600 text-indigo-600' : 'border-transparent text-slate-400 hover:text-slate-600'}`}>
@@ -508,42 +675,124 @@ export default function StudyManager() {
                         <div className="flex-1 overflow-y-auto p-6 bg-slate-50/30">
                             {drawerTab === 'overview' && (
                                 <div className="space-y-6">
+                                    {/* CONTACT INFO */}
                                     <div><h3 className="text-[10px] font-bold text-slate-400 uppercase mb-3 tracking-wider">Contact Details</h3><div className="grid grid-cols-2 gap-4"><div className="flex items-center justify-between p-3 border border-slate-100 rounded-lg hover:bg-slate-50 transition-colors group bg-white shadow-sm"><div className="flex items-center gap-3 overflow-hidden"><div className="p-2 bg-indigo-50 text-indigo-600 rounded-lg shrink-0"><Mail className="h-4 w-4" /></div><div className="text-xs font-bold text-slate-700 truncate">{selectedLead.email}</div></div><a href={`mailto:${selectedLead.email}`} className="text-[10px] font-bold text-indigo-600 opacity-0 group-hover:opacity-100 shrink-0">EMAIL</a></div><div className="flex items-center justify-between p-3 border border-slate-100 rounded-lg hover:bg-slate-50 transition-colors group bg-white shadow-sm"><div className="flex items-center gap-3"><div className="p-2 bg-emerald-50 text-emerald-600 rounded-lg shrink-0"><Phone className="h-4 w-4" /></div><div className="text-xs font-bold text-slate-700">{selectedLead.phone}</div></div><a href={`tel:${selectedLead.phone}`} className="text-[10px] font-bold text-emerald-600 opacity-0 group-hover:opacity-100 shrink-0">CALL</a></div></div></div>
                                     <div className="bg-white p-4 rounded-xl border border-slate-200 flex items-center justify-between shadow-sm"><div className="text-xs font-bold text-slate-500 uppercase tracking-wide">Pipeline Status</div><div className="relative w-48"><select className="w-full appearance-none bg-slate-50 border border-slate-200 hover:border-indigo-300 text-slate-900 font-bold text-sm rounded-lg py-2 pl-3 pr-8 outline-none focus:ring-2 focus:ring-indigo-500 transition-all cursor-pointer shadow-sm" value={selectedLead.site_status || 'New'} onChange={(e) => updateLeadStatus(selectedLead.id, e.target.value as LeadStatus)}><option value="New">New Applicant</option><option value="Contacted">Contacted / Screening</option><option value="Scheduled">Scheduled Visit</option><option value="Enrolled">Enrolled</option><option value="Not Eligible">Not Eligible</option><option value="Withdrawn">Withdrawn</option></select><ChevronDown className="absolute right-3 top-3 h-3 w-3 text-slate-400 pointer-events-none" /></div></div>
                                     
-                                    {/* CLINICAL NOTES SECTION */}
+                                    {/* CLINICAL NOTES */}
                                     <div className="bg-white border border-slate-200 rounded-xl shadow-sm overflow-hidden flex flex-col h-64">
-                                        <div className="bg-slate-50 px-4 py-3 border-b border-slate-200 flex justify-between items-center">
-                                            <h3 className="text-xs font-bold text-slate-700 uppercase flex items-center gap-2"><ClipboardList className="h-4 w-4 text-indigo-600" /> Clinical Notes</h3>
-                                            <div className="flex items-center gap-3">
-                                                <span className="text-[10px] text-slate-400 italic">Auto-save on blur</span>
-                                                <button onClick={saveNote} className="text-[10px] bg-indigo-50 text-indigo-600 px-2 py-1 rounded font-bold border border-indigo-100 hover:bg-indigo-100 flex items-center gap-1"><Save className="h-3 w-3" /> Save Note</button>
+                                            <div className="bg-slate-50 px-4 py-3 border-b border-slate-200 flex justify-between items-center">
+                                                <h3 className="text-xs font-bold text-slate-700 uppercase flex items-center gap-2"><ClipboardList className="h-4 w-4 text-indigo-600" /> Clinical Notes</h3>
+                                                <div className="flex items-center gap-3">
+                                                    <span className="text-[10px] text-slate-400 italic">Auto-save on blur</span>
+                                                    <button onClick={saveNote} className="text-[10px] bg-indigo-50 text-indigo-600 px-2 py-1 rounded font-bold border border-indigo-100 hover:bg-indigo-100 flex items-center gap-1"><Save className="h-3 w-3" /> Save Note</button>
+                                                </div>
                                             </div>
-                                        </div>
-                                        <textarea className="flex-1 w-full p-4 text-sm text-slate-800 outline-none resize-none font-medium leading-relaxed" placeholder="Enter clinical observations, call logs, or screening notes here..." value={noteBuffer} onChange={(e) => setNoteBuffer(e.target.value)} onBlur={saveNote} />
+                                            <textarea className="flex-1 w-full p-4 text-sm text-slate-800 outline-none resize-none font-medium leading-relaxed" placeholder="Enter clinical observations, call logs, or screening notes here..." value={noteBuffer} onChange={(e) => setNoteBuffer(e.target.value)} onBlur={saveNote} />
                                     </div>
 
-                                    {/* SCREENER RESPONSES & HISTORY */}
+                                    {/* SCREENER RESPONSES - WITH EDUCATIONAL CONTEXT */}
                                     <div>
                                         <h3 className="text-[10px] font-bold text-slate-400 uppercase mb-3 tracking-wider">Screener Responses & History</h3>
-                                        {missedCount > 0 && <div className="mb-4 p-4 rounded-xl bg-amber-50 border border-amber-100 flex items-start gap-3"><AlertCircle className="h-5 w-5 text-amber-500 shrink-0 mt-0.5" /><div><h4 className="text-sm font-bold text-amber-800">Criteria Mismatch</h4><p className="text-xs text-amber-700 mt-1 leading-relaxed">This patient missed <strong>{missedCount} criteria</strong>. Please contact the patient to verify if their responses are accurate before scheduling.</p></div></div>}
                                         
+                                        {/* --- EDUCATIONAL ALERT BOX --- */}
+                                        {matchScore.wrong > 0 ? (
+                                            <div className="mb-4 p-4 rounded-xl bg-amber-50 border border-amber-100 flex items-start gap-3">
+                                                <AlertCircle className="h-5 w-5 text-amber-500 shrink-0 mt-0.5" />
+                                                <div>
+                                                    <h4 className="text-sm font-bold text-amber-800">Criteria Mismatch ({matchScore.wrong} Missed)</h4>
+                                                    <p className="text-xs text-amber-700 mt-1 leading-relaxed">
+                                                        This patient answered incorrectly. Often this is a mistake. Call to verify. 
+                                                        <br/><br/>
+                                                        <strong>💡 Pro Tip:</strong> If they clarify their answer about a question on the call, update their answer to "Yes" or "No" by clicking the <strong>Pencil Icon <PenSquare className="inline h-3 w-3" /></strong> below. Correcting the answer will automatically update their Tier score.
+                                                    </p>
+                                                </div>
+                                            </div>
+                                        ) : matchScore.unsure > 0 ? (
+                                            <div className="mb-4 p-4 rounded-xl bg-indigo-50 border border-indigo-100 flex items-start gap-3">
+                                                <Info className="h-5 w-5 text-indigo-500 shrink-0 mt-0.5" />
+                                                <div>
+                                                    <h4 className="text-sm font-bold text-indigo-800">Clarification Needed ({matchScore.unsure} Unsure)</h4>
+                                                    <p className="text-xs text-indigo-700 mt-1 leading-relaxed">
+                                                        This candidate is a strong match but needs clarification on a few points. 
+                                                        <br/><br/>
+                                                        <strong>💡 Pro Tip:</strong> If they clarify their answer about a question on the call, update "I don't know" to "Yes" or "No" by clicking the <strong>Pencil Icon <PenSquare className="inline h-3 w-3" /></strong> below. Correcting the answer will automatically update their Tier score.
+                                                    </p>
+                                                </div>
+                                            </div>
+                                        ) : null}
+
                                         <div className="bg-white border border-slate-200 rounded-xl overflow-hidden shadow-sm">
                                             <div className="bg-slate-50 px-4 py-2 border-b border-slate-200 flex items-center justify-between">
                                                 <div className="flex items-center gap-2"><FileText className="h-3 w-3 text-slate-400" /><span className="text-[10px] font-bold text-slate-500 uppercase">Questionnaire Data</span></div>
-                                                <div className={`flex items-center gap-1.5 px-2 py-1 rounded text-[10px] font-bold border ${matchScore.count === matchScore.total ? 'bg-emerald-50 text-emerald-700 border-emerald-100' : 'bg-amber-50 text-amber-700 border-amber-100'}`}><Calculator className="h-3 w-3" />{matchScore.count}/{matchScore.total} Criteria Met</div>
+                                                <div className={`flex items-center gap-1.5 px-2 py-1 rounded text-[10px] font-bold border ${matchScore.count === matchScore.total ? 'bg-emerald-50 text-emerald-700 border-emerald-100' : 'bg-amber-50 text-amber-700 border-amber-100'}`}>
+                                                    <Calculator className="h-3 w-3" />
+                                                    {matchScore.count}/{matchScore.total} Met
+                                                    {matchScore.unsure > 0 && <span className="ml-1 text-amber-600">({matchScore.unsure} Unsure)</span>}
+                                                </div>
                                             </div>
                                             <div className="p-4 space-y-4 max-h-[500px] overflow-y-auto">
-                                                {trial.screener_questions?.map((q: any, i: number) => { 
+                                                {questions.map((q: any, i: number) => { 
                                                     const ans = selectedLead.answers && selectedLead.answers[i]; 
                                                     const isMatch = ans === q.correct_answer; 
+                                                    const isUnsure = ans && (ans.toLowerCase().includes("know") || ans.toLowerCase().includes("unsure"));
+                                                    const isEditing = editingAnswerIndex === i;
+
+                                                    // --- COLOR LOGIC ---
+                                                    let cardClass = 'bg-red-50 border-red-200';
+                                                    let badgeClass = 'text-red-700 bg-white border-red-200 shadow-sm';
+
+                                                    if (isMatch) {
+                                                        cardClass = 'bg-slate-50 border-slate-200';
+                                                        badgeClass = 'text-emerald-700 bg-white border-emerald-200 shadow-sm';
+                                                    } else if (isUnsure) {
+                                                        cardClass = 'bg-orange-50 border-orange-200';
+                                                        badgeClass = 'text-orange-700 bg-white border-orange-200 shadow-sm';
+                                                    }
+
                                                     return ( 
-                                                        <div key={i} className={`p-4 rounded-xl border ${isMatch ? 'bg-slate-50 border-slate-200' : 'bg-red-50 border-red-200'}`}>
-                                                            <p className="text-sm text-slate-800 font-medium mb-3 leading-relaxed">{q.question}</p>
-                                                            <div className="flex items-center justify-between">
-                                                                <div className="flex items-center gap-2"><span className="text-[10px] text-slate-400 font-bold uppercase tracking-wide">Patient Answer:</span><span className={`text-xs font-bold px-3 py-1 rounded-md border ${isMatch ? 'text-emerald-700 bg-white border-emerald-200 shadow-sm' : 'text-red-700 bg-white border-red-200 shadow-sm'}`}>{ans || "N/A"}</span></div>
-                                                                {!isMatch && (<div className="flex items-center gap-2"><span className="text-[10px] text-slate-400 font-bold uppercase tracking-wide">Required:</span><span className="text-xs font-bold text-slate-600 bg-slate-200 px-2 py-1 rounded">{q.correct_answer}</span></div>)}
-                                                            </div>
+                                                        <div key={i} className={`p-4 rounded-xl border ${cardClass} relative group/card`}>
+                                                            <p className="text-sm text-slate-800 font-medium mb-3 leading-relaxed pr-8">{q.question}</p>
+                                                            
+                                                            {/* EDIT MODE */}
+                                                            {isEditing ? (
+                                                                <div className="flex items-center gap-2 animate-in fade-in">
+                                                                        <select 
+                                                                            className="flex-1 bg-white border border-indigo-300 rounded-lg px-2 py-1 text-sm outline-none focus:ring-2 focus:ring-indigo-500"
+                                                                            value={tempAnswer}
+                                                                            onChange={(e) => setTempAnswer(e.target.value)}
+                                                                        >
+                                                                            <option value="Yes">Yes</option>
+                                                                            <option value="No">No</option>
+                                                                            <option value="I don't know">I don't know</option>
+                                                                        </select>
+                                                                        <button onClick={() => updateLeadAnswer(i, tempAnswer)} className="bg-indigo-600 text-white px-2 py-1 rounded text-xs font-bold hover:bg-indigo-700">Save</button>
+                                                                        <button onClick={() => setEditingAnswerIndex(null)} className="text-slate-400 hover:text-slate-600 px-2">Cancel</button>
+                                                                </div>
+                                                            ) : (
+                                                                /* DISPLAY MODE */
+                                                                <div className="flex items-center justify-between">
+                                                                        <div className="flex items-center gap-2">
+                                                                            <span className="text-[10px] text-slate-400 font-bold uppercase tracking-wide">Patient Answer:</span>
+                                                                            <span className={`text-xs font-bold px-3 py-1 rounded-md border ${badgeClass}`}>{ans || "N/A"}</span>
+                                                                            
+                                                                            {/* EDIT BUTTON (FIXED) */}
+                                                                            <button 
+                                                                                onClick={() => { setEditingAnswerIndex(i); setTempAnswer(normalizeAnswer(ans)); }} 
+                                                                                className="p-1 text-slate-400 hover:text-indigo-600 hover:bg-white rounded transition-all opacity-0 group-hover/card:opacity-100"
+                                                                                title="Correct this answer"
+                                                                            >
+                                                                                <PenSquare className="h-3 w-3" />
+                                                                            </button>
+                                                                        </div>
+                                                                        {!isMatch && (
+                                                                            <div className="flex items-center gap-2">
+                                                                                <span className="text-[10px] text-slate-400 font-bold uppercase tracking-wide">Required:</span>
+                                                                                <span className="text-xs font-bold text-slate-600 bg-slate-200 px-2 py-1 rounded">{q.correct_answer}</span>
+                                                                            </div>
+                                                                        )}
+                                                                </div>
+                                                            )}
                                                         </div> 
                                                     ); 
                                                 })}
@@ -552,24 +801,25 @@ export default function StudyManager() {
                                     </div>
                                 </div>
                             )}
+                            {/* ... (Messages and History tabs same as before) ... */}
                             {drawerTab === 'messages' && (
                                 <div className="flex flex-col h-[600px] bg-white border border-slate-200 rounded-xl shadow-sm overflow-hidden">
                                     <div ref={chatContainerRef} className="flex-1 p-4 overflow-y-auto bg-slate-50 space-y-4">
-                                        <div className="text-center text-[10px] text-slate-400 uppercase font-bold my-4">— Secure Chat Started —</div>
-                                        {messages.map((msg, i) => (
-                                            <div key={i} className={`flex ${msg.sender_role === 'researcher' ? 'justify-end' : 'justify-start'}`}>
-                                                <div className={`max-w-[80%] p-3 rounded-xl text-sm ${msg.sender_role === 'researcher' ? 'bg-indigo-600 text-white rounded-br-none' : 'bg-white border border-slate-200 rounded-bl-none text-slate-700'}`}>
-                                                    <div>{msg.content}</div>
-                                                    <div className="text-[10px] text-indigo-200 mt-1 flex items-center justify-end gap-1">
-                                                        {formatTime(msg.created_at)}
-                                                        {msg.sender_role === 'researcher' && (
-                                                            <span>{msg.is_read ? <CheckCheck className="h-3 w-3" /> : <Check className="h-3 w-3" />}</span>
-                                                        )}
+                                            <div className="text-center text-[10px] text-slate-400 uppercase font-bold my-4">— Secure Chat Started —</div>
+                                            {messages.map((msg, i) => (
+                                                <div key={i} className={`flex ${msg.sender_role === 'researcher' ? 'justify-end' : 'justify-start'}`}>
+                                                    <div className={`max-w-[80%] p-3 rounded-xl text-sm ${msg.sender_role === 'researcher' ? 'bg-indigo-600 text-white rounded-br-none' : 'bg-white border border-slate-200 rounded-bl-none text-slate-700'}`}>
+                                                        <div>{msg.content}</div>
+                                                        <div className="text-[10px] text-indigo-200 mt-1 flex items-center justify-end gap-1">
+                                                            {formatTime(msg.created_at)}
+                                                            {msg.sender_role === 'researcher' && (
+                                                                <span>{msg.is_read ? <CheckCheck className="h-3 w-3" /> : <Check className="h-3 w-3" />}</span>
+                                                            )}
+                                                        </div>
                                                     </div>
                                                 </div>
-                                            </div>
-                                        ))}
-                                        {messages.length === 0 && <div className="flex flex-col items-center justify-center h-full text-slate-400"><MessageSquare className="h-8 w-8 mb-2 opacity-20" /><p className="text-xs">No messages yet.</p><p className="text-[10px] mt-1">Send a message to the patient's portal.</p></div>}
+                                            ))}
+                                            {messages.length === 0 && <div className="flex flex-col items-center justify-center h-full text-slate-400"><MessageSquare className="h-8 w-8 mb-2 opacity-20" /><p className="text-xs">No messages yet.</p><p className="text-[10px] mt-1">Send a message to the patient's portal.</p></div>}
                                     </div>
                                     <div className="p-3 bg-white border-t border-slate-100 flex gap-2"><input type="text" className="flex-1 bg-slate-50 border border-slate-200 rounded-lg px-4 py-2 text-sm outline-none focus:ring-2 focus:ring-indigo-500" placeholder="Type a secure message..." value={messageInput} onChange={e => setMessageInput(e.target.value)} onKeyDown={e => e.key === 'Enter' && handleSendMessage()} /><button onClick={handleSendMessage} className="p-2 bg-indigo-600 text-white rounded-lg hover:bg-indigo-700 transition-colors"><Send className="h-4 w-4" /></button></div>
                                 </div>
@@ -580,13 +830,13 @@ export default function StudyManager() {
                                 </div>
                             )}
                         </div>
-                        <div className="p-4 border-t border-slate-100 bg-slate-50 flex justify-between items-center"><span className="text-[10px] text-slate-400">Lead ID: {selectedLead.id}</span><button onClick={triggerDelete} className="text-xs font-bold text-red-400 hover:text-red-600 flex items-center gap-1 transition-colors px-2 py-1 hover:bg-red-50 rounded"><Trash2 className="h-3 w-3" /> Delete</button></div>
+                        <div className="p-4 border-t border-slate-100 bg-slate-50 flex justify-between items-center"><span className="text-[10px] text-slate-400">Lead ID: {selectedLead.id}</span></div>
                     </div>
                 )}
             </>
         )}
         
-        {/* === POWERHOUSE ANALYTICS TAB === */}
+        {/* ... (Analytics, Profile, Media Tabs same as before) ... */}
         {activeTab === 'analytics' && (
             <div className="flex-1 p-8 bg-slate-50 h-full overflow-y-auto">
                {tier === 'free' && <LockedOverlay title="Unlock Clinical Intelligence" desc="Access deep insights into recruitment performance, drop-off rates, and patient demographics." />}
@@ -653,12 +903,15 @@ export default function StudyManager() {
                </div>
             </div>
         )}
-        
+
         {/* === RESTORED PROFILE TAB (FULL) === */}
         {activeTab === 'profile' && (
-            <div className="flex-1 overflow-y-auto p-10 bg-slate-50">
-                <div className="max-w-4xl mx-auto space-y-8 animate-in fade-in slide-in-from-bottom-2 pb-20 relative">
-                    {tier === 'free' && <LockedOverlay title="Unlock Custom Branding" desc="Free accounts use our standard AI overview. Upgrade to Pro to customize the text and screening questions." />}
+            <div className="flex-1 overflow-y-auto p-10 bg-slate-50 relative">
+                
+                {/* --- UPDATE: LockedOverlay Moved OUTSIDE the scrolling content wrapper --- */}
+                {tier === 'free' && <LockedOverlay title="Unlock Custom Branding" desc="Free accounts use our standard AI overview. Upgrade to Pro to customize the text and screening questions." />}
+                
+                <div className="max-w-4xl mx-auto space-y-8 animate-in fade-in slide-in-from-bottom-2 pb-20">
                     <div className={tier === 'free' ? 'filter blur-sm pointer-events-none select-none opacity-50' : ''}>
                         <div className="bg-blue-50 border border-blue-100 rounded-xl p-5 flex gap-4"><div className="p-2 bg-blue-100 text-blue-600 rounded-lg h-fit"><Lightbulb className="h-5 w-5" /></div><div><h4 className="font-bold text-blue-900 text-sm mb-1">Why edit this page?</h4><p className="text-blue-700 text-xs leading-relaxed">The "Default" text below was generated by AI based on your protocol. Use this space to edit the language and make any other changes you see fit including the screening questions.<br/><br/><b>Note:</b> You must click "Save Changes" at the bottom for your edits to go live.</p></div></div>
                         <div className="bg-white p-6 rounded-xl border border-slate-200 shadow-sm"><h3 className="font-bold text-slate-900 mb-4">Study Overview</h3><textarea className="w-full h-64 p-4 bg-slate-50 border border-slate-200 rounded-xl outline-none text-slate-900 text-sm leading-relaxed focus:ring-2 focus:ring-indigo-500" value={customSummary} onChange={(e) => setCustomSummary(e.target.value)} placeholder="Enter patient-friendly description..." /></div>
@@ -671,9 +924,12 @@ export default function StudyManager() {
 
         {/* === RESTORED MEDIA TAB (FULL) === */}
         {activeTab === 'media' && (
-            <div className="flex-1 overflow-y-auto p-10 bg-slate-50">
+            <div className="flex-1 overflow-y-auto p-10 bg-slate-50 relative">
+                
+                {/* --- UPDATE: LockedOverlay Moved OUTSIDE the scrolling content wrapper --- */}
+                {tier === 'free' && <LockedOverlay title="Boost Engagement with Media" desc="Professional trials get 3x more applicants. Upgrade to add an Intro Video, Facility Photos, and Custom FAQs." />}
+                
                 <div className="max-w-4xl mx-auto space-y-8 animate-in fade-in slide-in-from-bottom-2 pb-20 relative">
-                    {tier === 'free' && <LockedOverlay title="Boost Engagement with Media" desc="Professional trials get 3x more applicants. Upgrade to add an Intro Video, Facility Photos, and Custom FAQs." />}
                     <div className={tier === 'free' ? 'filter blur-sm pointer-events-none select-none opacity-50' : ''}>
                         <div className="bg-white p-6 rounded-xl border border-slate-200 shadow-sm"><div className="flex items-start gap-4 mb-6"><div className="p-2 bg-indigo-50 text-indigo-600 rounded-lg"><Video className="h-5 w-5" /></div><div><h3 className="font-bold text-slate-900">Intro Video</h3><p className="text-xs text-slate-500 mt-1 leading-relaxed max-w-lg">Post a 30-second video of yourself (the PI or Coordinator) talking about the trial. <br/><span className="text-indigo-600 font-medium">Why?</span> This humanizes the study and significantly increases the chance of conversion.</p></div></div><input type="text" value={videoUrl} onChange={(e) => setVideoUrl(e.target.value)} placeholder="Paste link from YouTube, Vimeo, or Loom..." className="w-full p-3 bg-slate-50 border border-slate-200 rounded-xl outline-none focus:ring-2 focus:ring-indigo-500 text-sm" /></div>
                         <div className="bg-white p-6 rounded-xl border border-slate-200 shadow-sm"><div className="flex items-start justify-between mb-6"><div className="flex items-start gap-4"><div className="p-2 bg-indigo-50 text-indigo-600 rounded-lg"><ImageIcon className="h-5 w-5" /></div><div><h3 className="font-bold text-slate-900">Facility Photos</h3><p className="text-xs text-slate-500 mt-1 leading-relaxed max-w-lg">Upload photos of your lobby, exam rooms, or friendly staff.<br/><span className="text-indigo-600 font-medium">Why?</span> Familiarity breeds trust. Show patients they will be comfortable here.</p></div></div><label className="cursor-pointer text-xs font-bold text-indigo-600 bg-indigo-50 px-4 py-2 rounded-lg hover:bg-indigo-100 transition-colors flex items-center gap-2">{uploading ? <Loader2 className="h-4 w-4 animate-spin" /> : <UploadCloud className="h-4 w-4" />} Upload Photo <input type="file" accept="image/*" className="hidden" onChange={handlePhotoUpload} disabled={uploading} /></label></div>{photos.length > 0 ? (<div className="grid grid-cols-2 md:grid-cols-4 gap-4">{photos.map((url, idx) => (<div key={idx} className="relative group aspect-square rounded-xl overflow-hidden border border-slate-200 bg-slate-50"><img src={url} alt="Facility" className="w-full h-full object-cover" /><button onClick={() => removePhoto(url)} className="absolute top-2 right-2 p-1.5 bg-red-500 text-white rounded-lg opacity-0 group-hover:opacity-100 hover:bg-red-600"><Trash2 className="h-4 w-4" /></button></div>))}</div>) : <div className="text-center py-8 border-2 border-dashed border-slate-100 rounded-xl bg-slate-50/50"><ImageIcon className="h-8 w-8 text-slate-300 mx-auto mb-2" /><p className="text-sm text-slate-400">No photos uploaded yet.</p></div>}</div>
@@ -686,18 +942,6 @@ export default function StudyManager() {
 
         {/* TOAST */}
         {showToast && <div className="absolute bottom-6 right-6 bg-slate-900 text-white px-4 py-2 rounded-lg shadow-xl text-sm font-bold flex items-center gap-2 animate-in fade-in slide-in-from-bottom-2"><Check className="h-4 w-4 text-emerald-400" /> Saved</div>}
-
-        {/* CUSTOM DELETE CONFIRMATION MODAL */}
-        {isDeleteModalOpen && (
-            <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-900/60 backdrop-blur-sm animate-in fade-in duration-200">
-                <div className="bg-white rounded-2xl shadow-2xl max-w-md w-full p-6 animate-in zoom-in-95 duration-200 border border-slate-200">
-                    <div className="flex items-center gap-3 mb-4 text-amber-600 bg-amber-50 p-3 rounded-xl w-fit"><AlertTriangle className="h-6 w-6" /><span className="font-bold text-sm uppercase">Permanent Action</span></div>
-                    <h3 className="text-xl font-bold text-slate-900 mb-2">Delete {selectedLead?.name}?</h3>
-                    <p className="text-sm text-slate-500 leading-relaxed mb-6">This will <strong>permanently remove</strong> this patient record and all history from your database.<br/><br/><span className="font-medium text-slate-700 bg-slate-100 px-1 py-0.5 rounded">⚠️ Recommendation:</span> If they did not qualify, move them to <strong>"Not Eligible"</strong> instead. This keeps your recruitment metrics accurate.</p>
-                    <div className="flex gap-3"><button onClick={() => setIsDeleteModalOpen(false)} className="flex-1 py-3 border border-slate-200 rounded-xl font-bold text-slate-600 hover:bg-slate-50 transition-colors text-sm">Cancel</button><button onClick={confirmDeleteLead} disabled={isDeleting} className="flex-1 py-3 bg-red-600 text-white rounded-xl font-bold hover:bg-red-700 shadow-md hover:shadow-lg transition-all text-sm flex items-center justify-center gap-2">{isDeleting ? <Loader2 className="h-4 w-4 animate-spin" /> : "Yes, Delete Forever"}</button></div>
-                </div>
-            </div>
-        )}
 
       </div>
     </div>
