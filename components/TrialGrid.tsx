@@ -3,17 +3,20 @@
 import { useEffect, useState, useRef } from "react";
 import { supabase } from "@/lib/supabase";
 import TrialCard from "./TrialCard";
+import TrialCardWide from "./TrialCardWide"; // <--- IMPORTING THE NEW CARD
 import NoResults from "./NoResults"; 
-import { ChevronLeft, ChevronRight, Sparkles, Search } from "lucide-react"; 
+import { ChevronLeft, ChevronRight, Sparkles, Search, Filter } from "lucide-react"; 
 
 export interface Trial {
   id: string;
+  nct_id: string;
   title: string;
   condition: string;
   location: string;
-  compensation: string;
   status: string;
   tags: string[];
+  simple_title?: string;
+  sponsor?: string;
 }
 
 export default function TrialGrid({ searchQuery }: { searchQuery: string }) {
@@ -49,7 +52,6 @@ export default function TrialGrid({ searchQuery }: { searchQuery: string }) {
 
         if (filtered.length > 0) {
           setTrials(filtered as any[]);
-          // Suggestions are everything else
           const others = allTrials.filter(t => !filtered.includes(t));
           setSuggestedTrials(others as any[]);
         } else {
@@ -80,14 +82,22 @@ export default function TrialGrid({ searchQuery }: { searchQuery: string }) {
     }
   };
 
-  if (loading) return <div className="text-center py-20 text-slate-400">Loading trials...</div>;
+  if (loading) {
+    return (
+      <div className="max-w-7xl mx-auto px-6 py-12 space-y-4">
+        {[1, 2, 3].map((i) => (
+          <div key={i} className="h-40 w-full bg-slate-100 rounded-2xl animate-pulse"></div>
+        ))}
+      </div>
+    );
+  }
 
   // CASE 1: No matches found
   if (trials.length === 0 && searchQuery) {
     return <NoResults query={searchQuery} suggestedTrials={suggestedTrials} />;
   }
 
-  // CASE 2: Homepage (Netflix Carousel Mode) - CLEAN WHITE
+  // CASE 2: Homepage (Carousel Mode) - Uses Vertical Cards
   if (!searchQuery) {
     return (
       <section className="py-20 bg-white border-t border-slate-100">
@@ -110,7 +120,6 @@ export default function TrialGrid({ searchQuery }: { searchQuery: string }) {
             </div>
           </div>
           
-          {/* THE CAROUSEL CONTAINER */}
           <div 
             ref={scrollContainerRef}
             className="flex gap-6 overflow-x-auto pb-8 scrollbar-hide snap-x scroll-smooth"
@@ -127,49 +136,50 @@ export default function TrialGrid({ searchQuery }: { searchQuery: string }) {
     );
   }
 
-  // CASE 3: Search Results (Grid Layout)
+  // CASE 3: Search Results (List Layout) - USES NEW WIDE CARDS
   return (
     <>
-      <section className="py-16 bg-white min-h-[400px]">
-        <div className="mx-auto max-w-7xl px-6">
-          <div className="mb-10 flex items-center gap-3">
-             <div className="flex h-10 w-10 items-center justify-center rounded-full bg-indigo-100 text-indigo-600">
-                <Search className="h-5 w-5" />
-             </div>
+      <section className="py-12 bg-slate-50 min-h-[600px]">
+        <div className="mx-auto max-w-5xl px-6">
+          
+          <div className="mb-8 flex flex-col md:flex-row md:items-end justify-between gap-4">
              <div>
-                <h2 className="text-3xl font-bold text-slate-900">
-                  Matches for "{searchQuery}"
+                <p className="text-xs font-bold text-slate-500 uppercase tracking-wider mb-1">Search Results</p>
+                <h2 className="text-3xl font-extrabold text-slate-900">
+                  Matches for <span className="text-indigo-600">"{searchQuery}"</span>
                 </h2>
-                <p className="text-slate-500">We found {trials.length} study matching your criteria.</p>
+             </div>
+             <div className="flex items-center gap-2 text-sm font-bold text-slate-600 bg-white px-4 py-2 rounded-lg border border-slate-200 shadow-sm">
+                <Filter className="h-4 w-4" />
+                {trials.length} {trials.length === 1 ? 'Study' : 'Studies'} Found
              </div>
           </div>
           
-          <div className="grid gap-8 sm:grid-cols-2 lg:grid-cols-3">
+          {/* THE NEW STACK - Using TrialCardWide */}
+          <div className="space-y-4">
             {trials.map((trial) => (
-              <TrialCard key={trial.id} trial={trial} />
+              <TrialCardWide key={trial.id} trial={trial} />
             ))}
           </div>
+
         </div>
       </section>
 
-      {/* Suggested Trials */}
+      {/* Suggested Trials Footer */}
       {suggestedTrials.length > 0 && (
-        <section className="py-20 bg-slate-50 border-t border-slate-200">
+        <section className="py-20 bg-white border-t border-slate-200">
           <div className="mx-auto max-w-7xl px-6">
             <div className="mb-10">
                <span className="text-sm font-bold uppercase tracking-wider text-indigo-600">
-                 More Opportunities
+                 Explore More
                </span>
                <h3 className="mt-2 text-2xl font-bold text-slate-900">
-                 Explore Nearby Studies
+                 Other Studies Near You
                </h3>
-               <p className="mt-2 text-slate-600 max-w-2xl">
-                 These trials are currently recruiting in your area for other conditions.
-               </p>
             </div>
 
             <div className="grid gap-8 sm:grid-cols-2 lg:grid-cols-3 opacity-90 hover:opacity-100 transition-opacity">
-              {suggestedTrials.map((trial) => (
+              {suggestedTrials.slice(0, 3).map((trial) => (
                 <TrialCard key={trial.id} trial={trial} />
               ))}
             </div>
