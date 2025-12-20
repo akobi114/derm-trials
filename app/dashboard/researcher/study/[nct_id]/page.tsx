@@ -36,13 +36,23 @@ const LockedOverlay = ({ title, desc }: { title: string, desc: string }) => (
   </div>
 );
 
-// --- FUZZY MATCHER (Shared with Admin) ---
-const isSameLocation = (leadCity: string, leadState: string, claimCity: string, claimState: string) => {
+// --- STRICT MATCHER (UPDATED) ---
+const isMatch = (lead: any, claimLocation: any) => {
+    if (!claimLocation) return false;
+
+    // 1. STRICT FACILITY MATCH (High Priority)
+    if (lead.site_facility && claimLocation.facility) {
+        return lead.site_facility.trim().toLowerCase() === claimLocation.facility.trim().toLowerCase();
+    }
+
+    // 2. CITY MATCH (Fallback logic for legacy data)
     const clean = (str: string) => (str || "").toLowerCase().trim().replace(/[^a-z]/g, "");
-    const lCity = clean(leadCity);
-    const cCity = clean(claimCity);
-    // Strict City Match (Ignore State if City matches)
+    const lCity = clean(lead.site_city);
+    const cCity = clean(claimLocation.city);
+    
+    // Strict City Match
     if (lCity && cCity && lCity === cCity) return true;
+
     return false;
 };
 
@@ -51,6 +61,7 @@ export default function StudyManager() {
   const router = useRouter();
   
   // --- STATE ---
+  const [user, setUser] = useState<any>(null); // NEW: Track actual logged-in user
   const [profile, setProfile] = useState<any>(null);
   const [tier, setTier] = useState<'free' | 'pro'>('free');
   const [trial, setTrial] = useState<any>(null);
@@ -91,11 +102,17 @@ export default function StudyManager() {
   // Scroll Ref for Chat
   const chatContainerRef = useRef<HTMLDivElement>(null);
 
-  // --- TAB HANDLING ---
+  // --- TAB HANDLING (UPDATED) ---
   const handleTabChange = (tab: 'leads' | 'profile' | 'media' | 'analytics') => {
     setActiveTab(tab);
     const newUrl = new URL(window.location.href);
     newUrl.searchParams.set('tab', tab);
+    
+    // UPDATE 1: Persist the claim_id so we don't lose the specific site context
+    const currentParams = new URLSearchParams(window.location.search);
+    const claimId = currentParams.get('claim_id');
+    if (claimId) newUrl.searchParams.set('claim_id', claimId);
+
     window.history.pushState({}, '', newUrl.toString());
   };
 
@@ -110,32 +127,83 @@ export default function StudyManager() {
       console.log("🔍 [Researcher] Loading Pipeline...");
       const { data: { user } } = await supabase.auth.getUser();
       if (!user) { router.push('/login'); return; }
+      setUser(user);
 
-      // 1. Get Profile
-      const { data: profileData } = await supabase.from('researcher_profiles').select('*').eq('user_id', user.id).single();
+      // --- RBAC FIX: Determine if User is PI or Team Member ---
+      // 1. Try to find as OWNER (PI)
+      let { data: profileData } = await supabase
+        .from('researcher_profiles')
+        .select('*')
+        .eq('user_id', user.id)
+        .maybeSingle();
+
+      let isOwner = !!profileData;
+      let memberId = null;
+
+      // 2. If not Owner, try to find as TEAM MEMBER
+      if (!isOwner) {
+          const { data: memberData } = await supabase
+            .from('team_members')
+            .select(`*, researcher_profiles(*)`)
+            .eq('user_id', user.id)
+            .maybeSingle();
+          
+          if (memberData && memberData.researcher_profiles) {
+              profileData = memberData.researcher_profiles; // Impersonate the Organization
+              memberId = memberData.id;
+          } else {
+              console.error("❌ No Access found for user.");
+              return;
+          }
+      }
+
       if (!profileData) { console.error("❌ No Profile Found"); return; }
       setProfile(profileData);
       setTier(profileData.tier || 'free');
 
       // --- CRITICAL FIX: CLEAN THE ID ---
-      // This ensures we don't fail due to hidden spaces or URL encoding
       const rawId = Array.isArray(params.nct_id) ? params.nct_id[0] : params.nct_id;
       const cleanId = decodeURIComponent(rawId).trim();
       
       console.log(`🔎 Seeking Claim for: "${cleanId}" (Researcher: ${profileData.id})`);
 
-      // 2. Get Claim (SAFE CHECK)
-      const { data: claimData, error: claimError } = await supabase
+      // 2. Get Claim (UPDATED: Check for specific ID first)
+      const urlParams = new URLSearchParams(window.location.search);
+      const claimId = urlParams.get('claim_id');
+
+      // --- PERMISSION CHECK (For Coordinators) ---
+      if (!isOwner && memberId && claimId) {
+          const { data: perm } = await supabase
+            .from('claim_permissions')
+            .select('id')
+            .eq('team_member_id', memberId)
+            .eq('claim_id', claimId)
+            .maybeSingle();
+          
+          if (!perm) {
+              // Note: We might allow basic view but strictly speaking this should match dashboard rules
+              console.warn("⚠️ Coordinator viewing study without explicit permission row (or DB latency).");
+          }
+      }
+      
+      let query = supabase
         .from('claimed_trials')
         .select('*')
-        .eq('nct_id', cleanId) // Use cleaned ID
-        .eq('researcher_id', profileData.id)
-        .single();
+        .eq('nct_id', cleanId)
+        .eq('researcher_id', profileData.id);
+
+      // If we have a specific claim ID, filter by it to distinguish between sites
+      if (claimId) {
+          query = query.eq('id', claimId);
+      }
+
+      const { data: claimsData, error: claimError } = await query;
+      
+      // If multiple exist but no ID provided, default to the first one found
+      const claimData = claimsData && claimsData.length > 0 ? claimsData[0] : null;
       
       if (claimError || !claimData) { 
           console.error("❌ Claim Verification Failed:", claimError);
-          // Don't auto-redirect immediately so you can see the error in console
-          // router.push('/dashboard/researcher'); 
           return; 
       }
       setClaim(claimData);
@@ -160,10 +228,8 @@ export default function StudyManager() {
             .order('created_at', { ascending: false });
 
           if (allLeads) {
-             // Filter in Memory using Fuzzy Match
-             const myLeads = allLeads.filter(l => 
-                 isSameLocation(l.site_city, l.site_state, claimData.site_location?.city, claimData.site_location?.state)
-             );
+             // --- CRITICAL FIX: STRICT FILTERING APPLIED HERE ---
+             const myLeads = allLeads.filter(l => isMatch(l, claimData.site_location));
 
              // 6. Fetch Unread Counts
              const leadIds = myLeads.map(l => l.id);
@@ -233,21 +299,47 @@ export default function StudyManager() {
       };
   }, [leads, questions]);
 
-  // --- REALTIME LISTENER ---
+// --- REALTIME LISTENER ---
   useEffect(() => {
+      // 1. Helper to sync the unread count for a specific lead from the server
+      const syncUnreadCount = async (leadId: string) => {
+          const { count } = await supabase
+              .from('messages')
+              .select('*', { count: 'exact', head: true })
+              .eq('lead_id', leadId)
+              .eq('sender_role', 'patient')
+              .eq('is_read', false);
+          
+          setLeads(prev => prev.map(l => l.id === leadId ? { ...l, unread_count: count || 0 } : l));
+      };
+
       const channel = supabase
           .channel('researcher-dashboard-channel')
+          
+          // 2. Listen for Lead Status Changes
           .on('postgres_changes', { event: 'UPDATE', schema: 'public', table: 'leads' }, (payload) => {
               setLeads(prev => prev.map(l => l.id === payload.new.id ? { ...l, ...payload.new } : l));
           })
+          
+          // 3. Listen for NEW Messages (INSERT)
           .on('postgres_changes', { event: 'INSERT', schema: 'public', table: 'messages' }, (payload) => {
               if (payload.new.sender_role === 'patient') {
+                  // If we aren't looking at this lead, refresh their count
                   if (selectedLeadId !== payload.new.lead_id) {
-                      setLeads(prev => prev.map(l => l.id === payload.new.lead_id ? { ...l, unread_count: (l.unread_count || 0) + 1 } : l));
+                      syncUnreadCount(payload.new.lead_id);
                   } else {
+                      // If we ARE looking at them, show the message and mark read
                       setMessages(prev => [...prev, payload.new]);
                       supabase.from('messages').update({ is_read: true }).eq('id', payload.new.id);
                   }
+              }
+          })
+
+          // 4. THE MISSING FIX: Listen for READ STATUS Updates (UPDATE)
+          .on('postgres_changes', { event: 'UPDATE', schema: 'public', table: 'messages' }, (payload) => {
+              // Whenever a message changes (e.g. becomes read), refresh the badge count
+              if (payload.new.lead_id) {
+                  syncUnreadCount(payload.new.lead_id);
               }
           })
           .subscribe();
@@ -321,14 +413,19 @@ export default function StudyManager() {
   };
   const removePhoto = (urlToRemove: string) => { setPhotos(photos.filter(url => url !== urlToRemove)); };
 
+  // --- UPDATED: AUDIT LOG (RECORDS ACTUAL USER) ---
   const recordAction = async (action: string, detail: string) => {
-    if (!selectedLeadId) return;
+    if (!selectedLeadId || !user) return;
+    
+    // NEW: Use logged-in user email, fallback to 'Team Member'
+    const actorName = user.email || "Team Member"; 
+
     const newLog = { 
         id: Date.now(), 
         lead_id: selectedLeadId, 
         action, 
         detail, 
-        performed_by: 'You', 
+        performed_by: actorName, 
         created_at: new Date().toISOString() 
     };
     setHistoryLogs(prev => [newLog, ...prev]); 
@@ -336,7 +433,7 @@ export default function StudyManager() {
         lead_id: selectedLeadId, 
         action, 
         detail, 
-        performed_by: 'You' 
+        performed_by: actorName 
     });
   };
 
@@ -426,13 +523,15 @@ export default function StudyManager() {
 
   const saveSettings = async () => {
     setIsSaving(true);
+    // UPDATE 3: Ensure we save to the specific claim ID to support multiple sites
     const { error } = await supabase.from('claimed_trials').update({ 
         custom_brief_summary: customSummary, 
         custom_screener_questions: questions, 
         video_url: videoUrl, 
         custom_faq: faqs, 
         facility_photos: photos 
-    }).eq('nct_id', params.nct_id).eq('researcher_id', profile.id);
+    }).eq('id', claim.id); // <--- CHANGED FROM nct_id TO claim.id
+
     if (error) alert("Save failed.");
     else { setShowToast(true); setTimeout(() => setShowToast(false), 3000); }
     setIsSaving(false);
@@ -757,40 +856,40 @@ export default function StudyManager() {
                                                             {/* EDIT MODE */}
                                                             {isEditing ? (
                                                                 <div className="flex items-center gap-2 animate-in fade-in">
-                                                                        <select 
-                                                                            className="flex-1 bg-white border border-indigo-300 rounded-lg px-2 py-1 text-sm outline-none focus:ring-2 focus:ring-indigo-500"
-                                                                            value={tempAnswer}
-                                                                            onChange={(e) => setTempAnswer(e.target.value)}
-                                                                        >
-                                                                            <option value="Yes">Yes</option>
-                                                                            <option value="No">No</option>
-                                                                            <option value="I don't know">I don't know</option>
-                                                                        </select>
-                                                                        <button onClick={() => updateLeadAnswer(i, tempAnswer)} className="bg-indigo-600 text-white px-2 py-1 rounded text-xs font-bold hover:bg-indigo-700">Save</button>
-                                                                        <button onClick={() => setEditingAnswerIndex(null)} className="text-slate-400 hover:text-slate-600 px-2">Cancel</button>
+                                                                    <select 
+                                                                        className="flex-1 bg-white border border-indigo-300 rounded-lg px-2 py-1 text-sm outline-none focus:ring-2 focus:ring-indigo-500"
+                                                                        value={tempAnswer}
+                                                                        onChange={(e) => setTempAnswer(e.target.value)}
+                                                                    >
+                                                                        <option value="Yes">Yes</option>
+                                                                        <option value="No">No</option>
+                                                                        <option value="I don't know">I don't know</option>
+                                                                    </select>
+                                                                    <button onClick={() => updateLeadAnswer(i, tempAnswer)} className="bg-indigo-600 text-white px-2 py-1 rounded text-xs font-bold hover:bg-indigo-700">Save</button>
+                                                                    <button onClick={() => setEditingAnswerIndex(null)} className="text-slate-400 hover:text-slate-600 px-2">Cancel</button>
                                                                 </div>
                                                             ) : (
                                                                 /* DISPLAY MODE */
                                                                 <div className="flex items-center justify-between">
+                                                                    <div className="flex items-center gap-2">
+                                                                        <span className="text-[10px] text-slate-400 font-bold uppercase tracking-wide">Patient Answer:</span>
+                                                                        <span className={`text-xs font-bold px-3 py-1 rounded-md border ${badgeClass}`}>{ans || "N/A"}</span>
+                                                                        
+                                                                        {/* EDIT BUTTON (FIXED) */}
+                                                                        <button 
+                                                                            onClick={() => { setEditingAnswerIndex(i); setTempAnswer(normalizeAnswer(ans)); }} 
+                                                                            className="p-1 text-slate-400 hover:text-indigo-600 hover:bg-white rounded transition-all opacity-0 group-hover/card:opacity-100"
+                                                                            title="Correct this answer"
+                                                                        >
+                                                                            <PenSquare className="h-3 w-3" />
+                                                                        </button>
+                                                                    </div>
+                                                                    {!isMatch && (
                                                                         <div className="flex items-center gap-2">
-                                                                            <span className="text-[10px] text-slate-400 font-bold uppercase tracking-wide">Patient Answer:</span>
-                                                                            <span className={`text-xs font-bold px-3 py-1 rounded-md border ${badgeClass}`}>{ans || "N/A"}</span>
-                                                                            
-                                                                            {/* EDIT BUTTON (FIXED) */}
-                                                                            <button 
-                                                                                onClick={() => { setEditingAnswerIndex(i); setTempAnswer(normalizeAnswer(ans)); }} 
-                                                                                className="p-1 text-slate-400 hover:text-indigo-600 hover:bg-white rounded transition-all opacity-0 group-hover/card:opacity-100"
-                                                                                title="Correct this answer"
-                                                                            >
-                                                                                <PenSquare className="h-3 w-3" />
-                                                                            </button>
+                                                                            <span className="text-[10px] text-slate-400 font-bold uppercase tracking-wide">Required:</span>
+                                                                            <span className="text-xs font-bold text-slate-600 bg-slate-200 px-2 py-1 rounded">{q.correct_answer}</span>
                                                                         </div>
-                                                                        {!isMatch && (
-                                                                            <div className="flex items-center gap-2">
-                                                                                <span className="text-[10px] text-slate-400 font-bold uppercase tracking-wide">Required:</span>
-                                                                                <span className="text-xs font-bold text-slate-600 bg-slate-200 px-2 py-1 rounded">{q.correct_answer}</span>
-                                                                            </div>
-                                                                        )}
+                                                                    )}
                                                                 </div>
                                                             )}
                                                         </div> 
@@ -801,7 +900,6 @@ export default function StudyManager() {
                                     </div>
                                 </div>
                             )}
-                            {/* ... (Messages and History tabs same as before) ... */}
                             {drawerTab === 'messages' && (
                                 <div className="flex flex-col h-[600px] bg-white border border-slate-200 rounded-xl shadow-sm overflow-hidden">
                                     <div ref={chatContainerRef} className="flex-1 p-4 overflow-y-auto bg-slate-50 space-y-4">

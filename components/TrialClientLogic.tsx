@@ -7,23 +7,138 @@ import {
   PartyPopper, Check, Lock, BookOpen, ChevronDown, FileText, 
   FlaskConical, CheckCircle2, Share2, AlertCircle, Eye, EyeOff, 
   Loader2, HelpCircle, Target, Syringe, Clock, Tags, Pill, Activity,
-  Phone, Mail, User
+  Phone, Mail, User, MapPin, Navigation, LayoutDashboard
 } from 'lucide-react';
 import { supabase } from '@/lib/supabase';
 import confetti from 'canvas-confetti';
 import Link from 'next/link';
 
-export default function TrialClientLogic({ trial, sidebarMode = false }: { trial: any, sidebarMode?: boolean }) {
+// --- HELPER: HAVERSINE DISTANCE FORMULA ---
+function calculateDistance(lat1: number, lon1: number, lat2: number, lon2: number) {
+  const R = 3958.8; 
+  const dLat = (lat2 - lat1) * (Math.PI / 180);
+  const dLon = (lon2 - lon1) * (Math.PI / 180);
+  const a = 
+    Math.sin(dLat / 2) * Math.sin(dLat / 2) +
+    Math.cos(lat1 * (Math.PI / 180)) * Math.cos(lat2 * (Math.PI / 180)) * Math.sin(dLon / 2) * Math.sin(dLon / 2);
+  const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
+  return R * c; 
+}
+
+// --- INTERNAL COMPONENT: SMART LOCATION PICKER ---
+function SmartLocationPicker({ locations, userZip, selected, onSelect }: any) {
+  const [sortedLocs, setSortedLocs] = useState<any[]>([]);
+  const [loadingDistances, setLoadingDistances] = useState(false);
+
+  useEffect(() => {
+    async function sortLocations() {
+      if (!locations || locations.length === 0) return;
+
+      if (!userZip) {
+        setSortedLocs(locations); 
+        return;
+      }
+
+      setLoadingDistances(true);
+      try {
+        const res = await fetch(`https://api.zippopotam.us/us/${userZip}`);
+        if (!res.ok) throw new Error("Zip not found");
+        
+        const data = await res.json();
+        const userLat = parseFloat(data.places[0].latitude);
+        const userLon = parseFloat(data.places[0].longitude);
+
+        const withDist = locations.map((loc: any) => {
+          let dist = 9999; 
+          const lat = loc.geoPoint?.lat || loc.lat || loc.latitude;
+          const lon = loc.geoPoint?.lon || loc.long || loc.longitude;
+
+          if (lat && lon) {
+            dist = calculateDistance(userLat, userLon, parseFloat(lat), parseFloat(lon));
+          }
+          return { ...loc, _distance: dist };
+        });
+
+        const sorted = withDist.sort((a: any, b: any) => a._distance - b._distance);
+        setSortedLocs(sorted);
+
+      } catch (err) {
+        console.warn("Location sort failed, falling back to default", err);
+        setSortedLocs(locations);
+      } finally {
+        setLoadingDistances(false);
+      }
+    }
+
+    sortLocations();
+  }, [locations, userZip]);
+
+  if (!locations || locations.length === 0) return null;
+
+  return (
+    <div className="space-y-3">
+      <label className="block text-xs font-bold text-slate-500 uppercase mb-1">
+        Select Preferred Location {loadingDistances && <span className="text-slate-400 font-normal normal-case animate-pulse">(Finding closest...)</span>}
+      </label>
+      
+      <div className="max-h-60 overflow-y-auto border border-slate-200 rounded-xl bg-white divide-y divide-slate-100">
+        {sortedLocs.map((loc: any, idx: number) => {
+          const isSelected = selected?.facility === loc.facility;
+          const isNearby = loc._distance !== undefined && loc._distance < 100;
+
+          return (
+            <div 
+              key={idx}
+              onClick={() => onSelect(loc)}
+              className={`
+                relative p-4 cursor-pointer transition-all hover:bg-slate-50
+                ${isSelected ? 'bg-indigo-50/60' : ''}
+              `}
+            >
+              <div className="flex items-start gap-3">
+                <div className={`
+                  mt-0.5 w-5 h-5 rounded-full border-2 flex items-center justify-center shrink-0 transition-colors
+                  ${isSelected ? 'border-indigo-600' : 'border-slate-300'}
+                `}>
+                  {isSelected && <div className="w-2.5 h-2.5 bg-indigo-600 rounded-full" />}
+                </div>
+
+                <div className="flex-1 min-w-0">
+                  <div className="flex items-center justify-between mb-0.5">
+                    <p className={`text-sm font-bold ${isSelected ? 'text-indigo-900' : 'text-slate-800'}`}>
+                      {loc.city}, {loc.state}
+                    </p>
+                    {isNearby && (
+                      <span className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded text-[10px] font-bold bg-emerald-100 text-emerald-700 uppercase tracking-wide">
+                        <Navigation className="h-3 w-3" /> {Math.round(loc._distance)} mi
+                      </span>
+                    )}
+                  </div>
+                  <p className="text-xs text-slate-500 truncate">{loc.facility}</p>
+                </div>
+              </div>
+            </div>
+          );
+        })}
+      </div>
+    </div>
+  );
+}
+
+// --- MAIN EXPORT ---
+export default function TrialClientLogic({ trial, sidebarMode = false, userZip }: { trial: any, sidebarMode?: boolean, userZip?: string }) {
   const router = useRouter(); 
 
   // --- STATE ---
   const [currentUser, setCurrentUser] = useState<any>(null); 
+  const [existingLead, setExistingLead] = useState<any>(null); // <--- NEW: Track prior application
+  
   const [isModalOpen, setIsModalOpen] = useState(false);
   const [answers, setAnswers] = useState<Record<string, string>>({});
-  const [screenerStep, setScreenerStep] = useState<'intro' | 'quiz' | 'analyzing' | 'form' | 'success'>('intro');
+  const [screenerStep, setScreenerStep] = useState<'intro' | 'quiz' | 'analyzing' | 'form' | 'location_select' | 'success'>('intro');
   const [leadStatus, setLeadStatus] = useState<'Strong Lead' | 'Unlikely - Review Needed'>('Strong Lead');
-  
-  // --- FORM STATE ---
+  const [selectedLocation, setSelectedLocation] = useState<any>(null);
+
   const [leadForm, setLeadForm] = useState({ 
       firstName: '', 
       lastName: '', 
@@ -37,16 +152,26 @@ export default function TrialClientLogic({ trial, sidebarMode = false }: { trial
   const [showPassword, setShowPassword] = useState(false);
   const [submittingLead, setSubmittingLead] = useState(false);
 
-  // --- AUTH CHECK ---
   useEffect(() => {
-    const checkUser = async () => {
+    const checkUserAndLead = async () => {
         const { data: { user } } = await supabase.auth.getUser();
         setCurrentUser(user);
-    };
-    checkUser();
-  }, []);
 
-  // --- DATA PARSING ---
+        // --- NEW: Check if this user already applied to this trial ---
+        if (user && trial.nct_id) {
+            const { data: lead } = await supabase
+                .from('leads')
+                .select('status, site_status')
+                .eq('user_id', user.id)
+                .eq('trial_id', trial.nct_id)
+                .maybeSingle();
+            
+            if (lead) setExistingLead(lead);
+        }
+    };
+    checkUserAndLead();
+  }, [trial.nct_id]);
+
   const safeParse = (data: any) => {
     if (!data) return null;
     if (Array.isArray(data) || typeof data === 'object') return data;
@@ -58,8 +183,8 @@ export default function TrialClientLogic({ trial, sidebarMode = false }: { trial
   const secondaryOutcomes = useMemo(() => safeParse(trial.secondary_outcomes) || [], [trial.secondary_outcomes]);
   const studyDesign = useMemo(() => safeParse(trial.study_design) || {}, [trial.study_design]);
   const screenerQuestions = useMemo(() => safeParse(trial.screener_questions) || [], [trial.screener_questions]);
+  const locationsList = useMemo(() => safeParse(trial.locations) || (trial.locations ? trial.locations : []), [trial.locations]);
 
-  // --- HELPERS ---
   const openScreener = () => {
     setScreenerStep('intro');
     setAnswers({});
@@ -87,7 +212,6 @@ export default function TrialClientLogic({ trial, sidebarMode = false }: { trial
     }
   };
 
-  // --- PHONE FORMATTER (555) 123-1234 ---
   const formatPhoneNumber = (value: string) => {
     const numbers = value.replace(/\D/g, '');
     if (numbers.length <= 3) return numbers;
@@ -102,7 +226,6 @@ export default function TrialClientLogic({ trial, sidebarMode = false }: { trial
     }
   };
 
-  // --- QUIZ LOGIC ---
   const handleQuizCheck = async () => {
     setScreenerStep('analyzing');
     await new Promise(resolve => setTimeout(resolve, 2000));
@@ -117,23 +240,35 @@ export default function TrialClientLogic({ trial, sidebarMode = false }: { trial
         });
     }
 
+    const newStatus = isMatch ? 'Strong Lead' : 'Unlikely - Review Needed';
+    setLeadStatus(newStatus);
+
     if (isMatch) {
-      setLeadStatus('Strong Lead');
-      confetti({ particleCount: 100, spread: 70, origin: { y: 0.6 }, zIndex: 9999 });
-    } else {
-      setLeadStatus('Unlikely - Review Needed');
+       confetti({ particleCount: 100, spread: 70, origin: { y: 0.6 }, zIndex: 9999 });
     }
 
     if (currentUser) {
-        handleInstantSubmit(isMatch ? 'Strong Lead' : 'Unlikely - Review Needed');
+        if (locationsList && locationsList.length > 0) {
+            setScreenerStep('location_select');
+        } else {
+            handleInstantSubmit(newStatus);
+        }
     } else {
         setScreenerStep('form');
     }
   };
 
-  // --- INSTANT SUBMIT (Logged In) ---
   const handleInstantSubmit = async (status: string) => {
-    const primaryLocation = trial.locations && trial.locations.length > 0 ? trial.locations[0] : null;
+    setSubmittingLead(true);
+    
+    if (locationsList.length > 0 && !selectedLocation) {
+        alert("Please select a preferred location before submitting.");
+        setSubmittingLead(false);
+        return;
+    }
+
+    const finalLocation = selectedLocation || (locationsList.length > 0 ? locationsList[0] : null);
+
     try {
         const { data: profile } = await supabase
             .from('candidate_profiles')
@@ -150,8 +285,9 @@ export default function TrialClientLogic({ trial, sidebarMode = false }: { trial
             phone: profile?.phone || '',
             status: status,
             answers: answers,
-            site_city: primaryLocation?.city || 'Unknown',
-            site_state: primaryLocation?.state || 'Unknown',
+            site_city: finalLocation?.city || 'Unknown',
+            site_state: finalLocation?.state || 'Unknown',
+            site_facility: finalLocation?.facility || '', 
             site_status: 'New'
         });
 
@@ -159,60 +295,45 @@ export default function TrialClientLogic({ trial, sidebarMode = false }: { trial
         setScreenerStep('success');
         setTimeout(() => { router.push('/dashboard/candidate'); }, 2000);
     } catch (err: any) {
-        alert("Error submitting application: " + err.message);
-        setScreenerStep('form'); 
+        if (!currentUser) {
+             setScreenerStep('form');
+        } else {
+             alert("Error submitting application: " + err.message);
+        }
+        setSubmittingLead(false);
     }
   };
 
-  // --- FORM SUBMIT (New User) ---
   const handleLeadSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     setSubmittingLead(true);
 
-    // 1. Validate Consent
+    if (locationsList && locationsList.length > 0 && !selectedLocation) {
+        alert("Please select a specific location (e.g. Scottsdale or Phoenix) to continue.");
+        setSubmittingLead(false);
+        return; 
+    }
+
     if (!agreedToTerms) {
-        alert("Please agree to the Terms & Privacy Policy to proceed.");
+        alert("Please agree to the Terms & Privacy Policy.");
         setSubmittingLead(false);
         return;
     }
 
-    // 2. Validate Password Match
     if (leadForm.password !== leadForm.confirmPassword) {
         alert("Passwords do not match.");
         setSubmittingLead(false);
         return;
     }
 
-    // 3. Validate Password Strength (Updated)
-    const hasUpperCase = /[A-Z]/.test(leadForm.password);
-    const hasNumber = /[0-9]/.test(leadForm.password);
-    if (leadForm.password.length < 6 || !hasUpperCase || !hasNumber) {
-        alert("Password must be at least 6 characters and contain a number and an uppercase letter.");
-        setSubmittingLead(false);
-        return;
-    }
-
-    // 4. Validate Phone Length
-    const rawPhone = leadForm.phone.replace(/\D/g, '');
-    if (rawPhone.length !== 10) {
-        alert("Please enter a valid 10-digit phone number.");
-        setSubmittingLead(false);
-        return;
-    }
-
-    const primaryLocation = trial.locations && trial.locations.length > 0 ? trial.locations[0] : null;
+    const finalLocation = selectedLocation || (locationsList.length > 0 ? locationsList[0] : null);
     const fullName = `${leadForm.firstName} ${leadForm.lastName}`.trim();
 
     try {
         const { data: authData, error: authError } = await supabase.auth.signUp({
             email: leadForm.email,
             password: leadForm.password,
-            options: {
-                data: {
-                    role: 'candidate',
-                    full_name: fullName
-                }
-            }
+            options: { data: { role: 'candidate', full_name: fullName } }
         });
 
         if (authError) throw authError;
@@ -227,8 +348,7 @@ export default function TrialClientLogic({ trial, sidebarMode = false }: { trial
                 first_name: leadForm.firstName,
                 last_name: leadForm.lastName
             }, { onConflict: 'user_id' })
-            .select()
-            .single();
+            .select().single();
 
         if (profileError) throw profileError;
 
@@ -241,8 +361,9 @@ export default function TrialClientLogic({ trial, sidebarMode = false }: { trial
             phone: leadForm.phone,
             status: leadStatus,
             answers: answers,
-            site_city: primaryLocation?.city || 'Unknown',
-            site_state: primaryLocation?.state || 'Unknown',
+            site_city: finalLocation?.city || 'Unknown',
+            site_state: finalLocation?.state || 'Unknown',
+            site_facility: finalLocation?.facility || '',
             site_status: 'New'
         });
 
@@ -265,8 +386,42 @@ export default function TrialClientLogic({ trial, sidebarMode = false }: { trial
   const isRecruiting = trial.status && trial.status.toLowerCase().trim() === 'recruiting';
 
   if (sidebarMode) {
-    if (isRecruiting) {
-      return (
+    // --- 1. CASE: NOT RECRUITING ---
+    if (!isRecruiting) {
+        return (
+            <div className="bg-slate-50 rounded-2xl border border-slate-200 p-6 relative overflow-hidden">
+               <div className="relative z-10">
+                 <div className="w-12 h-12 bg-slate-200 text-slate-500 rounded-xl flex items-center justify-center mb-4"><Lock className="h-6 w-6" /></div>
+                 <h3 className="text-lg font-bold text-slate-700 mb-2">Enrollment Closed</h3>
+                 <p className="text-slate-500 text-sm mb-4 leading-relaxed">This study is currently <strong>{trial.status?.toLowerCase()}</strong>.</p>
+               </div>
+            </div>
+        );
+    }
+
+    // --- 2. CASE: ALREADY APPLIED (The Fix) ---
+    if (existingLead) {
+        return (
+            <div className="bg-emerald-50 rounded-2xl border border-emerald-100 p-6 relative overflow-hidden shadow-sm">
+               <div className="relative z-10">
+                 <div className="w-12 h-12 bg-emerald-100 text-emerald-600 rounded-xl flex items-center justify-center mb-4"><CheckCircle2 className="h-6 w-6" /></div>
+                 <h3 className="text-lg font-bold text-emerald-900 mb-2">Application Submitted</h3>
+                 <p className="text-emerald-700 text-sm mb-6 leading-relaxed">
+                    You have already applied for this study. You can track your status in your dashboard.
+                 </p>
+                 <Link 
+                    href="/dashboard/candidate" 
+                    className="w-full bg-white text-emerald-700 border border-emerald-200 py-3 rounded-xl font-bold hover:bg-emerald-100 transition-all flex items-center justify-center gap-2 shadow-sm"
+                 >
+                   <LayoutDashboard className="h-4 w-4" /> Go to Dashboard
+                 </Link>
+               </div>
+            </div>
+        );
+    }
+
+    // --- 3. CASE: STANDARD APPLY BOX ---
+    return (
         <>
           <div className="bg-white rounded-2xl shadow-sm border border-slate-200 p-6 relative overflow-hidden group">
              <div className="absolute top-0 right-0 w-32 h-32 bg-indigo-50 rounded-full blur-3xl -mr-10 -mt-10 transition-transform group-hover:scale-150 duration-700"></div>
@@ -285,6 +440,8 @@ export default function TrialClientLogic({ trial, sidebarMode = false }: { trial
                </div>
              </div>
           </div>
+          
+          {/* SCREENER MODAL (Unchanged) */}
           {isModalOpen && (
             <div className="fixed inset-0 z-50 flex items-center justify-center p-4">
               <div className="absolute inset-0 bg-slate-900/60 backdrop-blur-sm transition-opacity" onClick={closeScreener}></div>
@@ -299,13 +456,7 @@ export default function TrialClientLogic({ trial, sidebarMode = false }: { trial
                       <div className="w-16 h-16 bg-indigo-100 text-indigo-600 rounded-full flex items-center justify-center mx-auto mb-4"><ShieldCheck className="h-8 w-8" /></div>
                       <h4 className="text-xl font-bold text-slate-900 mb-2">Check Your Eligibility</h4>
                       <p className="text-slate-600 mb-8 max-w-xs mx-auto text-sm leading-relaxed">Answer a few questions for <strong>{trial.title}</strong>.</p>
-                      
-                      {currentUser && (
-                          <div className="mb-6 p-3 bg-emerald-50 text-emerald-700 text-xs font-bold rounded-lg border border-emerald-100">
-                              👋 Welcome back! Applying as {currentUser.email}
-                          </div>
-                      )}
-
+                      {currentUser && <div className="mb-6 p-3 bg-emerald-50 text-emerald-700 text-xs font-bold rounded-lg border border-emerald-100">👋 Welcome back! Applying as {currentUser.email}</div>}
                       <button onClick={() => setScreenerStep('quiz')} className="w-full bg-indigo-600 text-white py-3.5 rounded-xl font-bold hover:bg-indigo-700 flex items-center justify-center gap-2">Start <ArrowRight className="h-4 w-4" /></button>
                     </div>
                   )}
@@ -337,6 +488,32 @@ export default function TrialClientLogic({ trial, sidebarMode = false }: { trial
                     </div>
                   )}
                   
+                  {/* --- NEW STEP: LOCATION SELECT FOR LOGGED IN USERS --- */}
+                  {screenerStep === 'location_select' && (
+                    <div className="animate-in slide-in-from-right-4 duration-300">
+                      <div className="text-center mb-6">
+                        <div className="w-12 h-12 bg-indigo-100 text-indigo-600 rounded-xl flex items-center justify-center mx-auto mb-3"><MapPin className="h-6 w-6" /></div>
+                        <h4 className="text-lg font-bold text-slate-900">One Last Thing</h4>
+                        <p className="text-slate-500 text-sm">Please select the location you would like to attend.</p>
+                      </div>
+                      
+                      <SmartLocationPicker 
+                          locations={locationsList} 
+                          userZip={userZip} 
+                          selected={selectedLocation} 
+                          onSelect={setSelectedLocation}
+                      />
+
+                      <button 
+                        onClick={() => handleInstantSubmit(leadStatus)}
+                        disabled={!selectedLocation || submittingLead}
+                        className="w-full bg-indigo-600 text-white py-3.5 rounded-xl font-bold hover:bg-indigo-700 shadow-md mt-6 transition-all disabled:opacity-50 disabled:cursor-not-allowed"
+                      >
+                        {submittingLead ? "Submitting..." : "Confirm & Apply"}
+                      </button>
+                    </div>
+                  )}
+
                   {screenerStep === 'form' && (
                     <div className="animate-in slide-in-from-right-4 duration-300">
                       <div className={`p-5 rounded-xl mb-6 flex items-start gap-4 border shadow-sm ${leadStatus === 'Strong Lead' ? 'bg-emerald-50 border-emerald-100' : 'bg-indigo-50 border-indigo-100'}`}>
@@ -351,7 +528,22 @@ export default function TrialClientLogic({ trial, sidebarMode = false }: { trial
                       
                       <form onSubmit={handleLeadSubmit} className="space-y-4">
                         
-                        {/* FIRST & LAST NAME */}
+                        {locationsList && locationsList.length > 0 && (
+                             <div className="mb-6 border rounded-xl border-indigo-100 overflow-hidden">
+                                 <div className="bg-indigo-50/50 px-4 py-2 border-b border-indigo-100">
+                                     <label className="text-xs font-bold text-indigo-900 uppercase">
+                                         Select Your Clinic Location <span className="text-red-500">*</span>
+                                     </label>
+                                 </div>
+                                 <SmartLocationPicker 
+                                    locations={locationsList} 
+                                    userZip={userZip} 
+                                    selected={selectedLocation} 
+                                    onSelect={setSelectedLocation}
+                                 />
+                             </div>
+                        )}
+
                         <div className="grid grid-cols-2 gap-4">
                             <div>
                                 <label className="block text-xs font-bold text-slate-500 uppercase mb-1">First Name</label>
@@ -366,7 +558,6 @@ export default function TrialClientLogic({ trial, sidebarMode = false }: { trial
                             </div>
                         </div>
 
-                        {/* EMAIL */}
                         <div>
                             <label className="block text-xs font-bold text-slate-500 uppercase mb-1">Email Address</label>
                             <div className="relative">
@@ -375,7 +566,6 @@ export default function TrialClientLogic({ trial, sidebarMode = false }: { trial
                             </div>
                         </div>
 
-                        {/* PHONE WITH FORMATTING */}
                         <div>
                             <label className="block text-xs font-bold text-slate-500 uppercase mb-1">Mobile Phone</label>
                             <div className="relative">
@@ -384,7 +574,6 @@ export default function TrialClientLogic({ trial, sidebarMode = false }: { trial
                             </div>
                         </div>
 
-                        {/* PASSWORD FIELDS */}
                         <div className="grid grid-cols-1 gap-4 pt-2">
                             <div>
                                 <label className="block text-xs font-bold text-slate-500 uppercase mb-1">Create Password</label>
@@ -399,7 +588,6 @@ export default function TrialClientLogic({ trial, sidebarMode = false }: { trial
                             </div>
                         </div>
 
-                        {/* REQUIREMENTS LIST */}
                         <div className="text-[10px] text-slate-400 bg-slate-50 p-3 rounded-lg border border-slate-100">
                             <p className="font-bold mb-1">Security Requirements:</p>
                             <ul className="list-disc pl-3 space-y-0.5">
@@ -410,7 +598,6 @@ export default function TrialClientLogic({ trial, sidebarMode = false }: { trial
                             </ul>
                         </div>
 
-                        {/* --- CONSENT CHECKBOX (Updated with Links & Opt-Out) --- */}
                         <div className="pt-2">
                             <label className="flex items-start gap-3 cursor-pointer group">
                                 <div className="relative flex items-center mt-0.5">
@@ -461,20 +648,9 @@ export default function TrialClientLogic({ trial, sidebarMode = false }: { trial
           )}
         </>
       );
-    } else {
-      return (
-        <div className="bg-slate-50 rounded-2xl border border-slate-200 p-6 relative overflow-hidden">
-           <div className="relative z-10">
-             <div className="w-12 h-12 bg-slate-200 text-slate-500 rounded-xl flex items-center justify-center mb-4"><Lock className="h-6 w-6" /></div>
-             <h3 className="text-lg font-bold text-slate-700 mb-2">Enrollment Closed</h3>
-             <p className="text-slate-500 text-sm mb-4 leading-relaxed">This study is currently <strong>{trial.status?.toLowerCase()}</strong>.</p>
-           </div>
-        </div>
-      );
-    }
   }
 
-  // --- RENDER MAIN CONTENT ACCORDIONS ---
+  // --- RENDER MAIN CONTENT ACCORDIONS (Unchanged) ---
   return (
     <div className="space-y-4">
       {/* 1. Official Overview */}

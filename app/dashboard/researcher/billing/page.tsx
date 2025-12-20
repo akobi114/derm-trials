@@ -1,12 +1,10 @@
 "use client";
 
 import { useEffect, useState } from 'react';
-import Link from 'next/link';
 import { supabase } from '@/lib/supabase';
-// FIX: Added 'Lock' to the imports list below
 import { 
-  Loader2, ArrowLeft, CreditCard, Download, CheckCircle2, 
-  Crown, ShieldCheck, Zap, Lock
+  Loader2, CreditCard, Download, CheckCircle2, 
+  Crown, Zap, Lock
 } from 'lucide-react';
 
 export default function BillingPage() {
@@ -52,22 +50,15 @@ export default function BillingPage() {
     alert("This will open your Stripe Checkout page. For this demo, please contact the admin to upgrade your account manually.");
   };
 
-  if (loading) return <div className="min-h-screen flex items-center justify-center"><Loader2 className="h-8 w-8 animate-spin text-slate-400" /></div>;
+  if (loading) return <div className="flex h-full items-center justify-center"><Loader2 className="h-8 w-8 animate-spin text-slate-400" /></div>;
 
   const isPro = profile?.tier === 'pro';
 
+  // --- NOTE: Sidebar <aside> and <main> wrapper removed. 
+  // This content is automatically injected into the new layout.tsx ---
+  
   return (
-    <div className="min-h-screen bg-slate-50 font-sans text-slate-900 flex">
-      
-      {/* SIDEBAR */}
-      <aside className="w-64 bg-white border-r border-slate-200 hidden md:block fixed h-full z-10">
-        <div className="p-6 h-20 flex items-center border-b border-slate-100 font-bold text-xl">Derm<span className="text-indigo-600">Trials</span></div>
-        <nav className="p-4 space-y-1">
-            <Link href="/dashboard/researcher" className="flex items-center gap-3 px-4 py-3 rounded-lg font-medium text-sm text-slate-600 hover:bg-slate-50"><ArrowLeft className="h-5 w-5" /> Back to Dashboard</Link>
-        </nav>
-      </aside>
-
-      <main className="flex-1 md:ml-64 p-10">
+    <div className="p-8 max-w-5xl mx-auto animate-in fade-in duration-300">
         <header className="mb-10">
             <h1 className="text-3xl font-bold text-slate-900">Billing & Subscription</h1>
             <p className="text-slate-500 mt-2">Manage your plan and invoices.</p>
@@ -168,8 +159,6 @@ export default function BillingPage() {
                 </tbody>
             </table>
         </div>
-
-      </main>
     </div>
   );
 }

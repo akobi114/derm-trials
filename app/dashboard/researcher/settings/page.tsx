@@ -2,11 +2,10 @@
 
 import { useEffect, useState } from 'react';
 import { useRouter } from 'next/navigation';
-import Link from 'next/link';
 import { supabase } from '@/lib/supabase';
 import { 
-  Loader2, LayoutDashboard, Settings, LogOut, CreditCard, 
-  User, Building2, Lock, Save, Mail, Phone, ShieldCheck, AlertCircle, CheckCircle2
+  Loader2, User, Building2, Lock, Save, Mail, Phone, 
+  ShieldCheck, AlertCircle, CheckCircle2
 } from 'lucide-react';
 
 export default function ResearcherSettings() {
@@ -156,40 +155,11 @@ export default function ResearcherSettings() {
     }
   };
 
-  const handleLogout = async () => { await supabase.auth.signOut(); router.push('/login'); };
+  if (loading) return <div className="flex items-center justify-center h-full"><Loader2 className="h-8 w-8 animate-spin text-indigo-600" /></div>;
 
-  if (loading) return <div className="min-h-screen flex items-center justify-center bg-slate-50"><Loader2 className="h-8 w-8 animate-spin text-indigo-600" /></div>;
-
+  // --- NOTE: Sidebar <aside> removed. Main container padding applied here. ---
   return (
-    <div className="min-h-screen bg-slate-50 flex font-sans text-slate-900">
-      
-      {/* SIDEBAR */}
-      <aside className="w-64 bg-white border-r border-slate-200 hidden md:flex flex-col fixed h-full z-10">
-        <div className="p-6 h-20 flex items-center border-b border-slate-100">
-          <Link href="/" className="font-bold text-xl tracking-tight cursor-pointer hover:opacity-80 transition-opacity">
-            Derm<span className="text-indigo-600">Trials</span>
-          </Link>
-        </div>
-        <nav className="flex-1 p-4 space-y-1">
-          <Link href="/dashboard/researcher" className="flex items-center gap-3 px-4 py-3 rounded-lg font-medium text-sm text-slate-600 hover:bg-slate-50 transition-colors">
-            <LayoutDashboard className="h-5 w-5" /> Overview
-          </Link>
-          <Link href="/dashboard/researcher/billing" className="flex items-center gap-3 px-4 py-3 rounded-lg font-medium text-sm text-slate-600 hover:bg-slate-50 transition-colors">
-            <CreditCard className="h-5 w-5" /> Billing & Invoices
-          </Link>
-          <Link href="/dashboard/researcher/settings" className="flex items-center gap-3 px-4 py-3 rounded-lg font-medium text-sm bg-indigo-50 text-indigo-700">
-            <Settings className="h-5 w-5" /> Settings
-          </Link>
-        </nav>
-        <div className="p-4 border-t border-slate-100">
-          <button onClick={handleLogout} className="flex items-center gap-3 px-4 py-3 text-slate-500 hover:text-red-600 hover:bg-red-50 rounded-lg font-medium text-sm w-full transition-colors">
-            <LogOut className="h-5 w-5" /> Sign Out
-          </button>
-        </div>
-      </aside>
-
-      {/* MAIN CONTENT */}
-      <main className="flex-1 md:ml-64 p-8">
+    <div className="p-8 max-w-4xl mx-auto animate-in fade-in duration-300">
         <h1 className="text-2xl font-bold text-slate-900 mb-8">Account Settings</h1>
 
         {/* TABS */}
@@ -212,7 +182,7 @@ export default function ResearcherSettings() {
 
         {/* TAB 1: PROFILE FORM */}
         {activeTab === 'profile' && (
-            <div className="max-w-2xl bg-white p-8 rounded-2xl shadow-sm border border-slate-200">
+            <div className="bg-white p-8 rounded-2xl shadow-sm border border-slate-200">
                 <form onSubmit={handleProfileUpdate} className="space-y-6">
                     <div className="grid grid-cols-2 gap-6">
                         <div>
@@ -312,8 +282,6 @@ export default function ResearcherSettings() {
                 </form>
             </div>
         )}
-
-      </main>
     </div>
   );
 }

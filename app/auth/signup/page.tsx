@@ -1,11 +1,11 @@
 "use client";
 
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
 import { useRouter, useSearchParams } from 'next/navigation';
 import Link from 'next/link';
 import { supabase } from '@/lib/supabase';
 import { 
-  Loader2, Beaker, ShieldCheck, ArrowRight, AlertCircle, 
+  Loader2, ArrowRight, AlertCircle, 
   Building2, UserCircle, Hash, Mail, Lock, CheckCircle2, Phone,
   Upload, FileText
 } from 'lucide-react';
@@ -14,25 +14,47 @@ export default function Signup() {
   const router = useRouter();
   const searchParams = useSearchParams();
   
-  const isResearcher = searchParams.get('role') === 'researcher';
+  const roleParam = searchParams.get('role');
+  const tokenParam = searchParams.get('token');
+
+  // --- LOGIC: DETERMINE USER TYPE ---
+  const isResearcher = roleParam === 'researcher'; 
+  const isTeamMember = roleParam === 'team_member'; 
+  const isPatient = !isResearcher && !isTeamMember;
 
   const [form, setForm] = useState({ 
-    firstName: '', 
-    lastName: '',
-    email: '', 
-    phone: '', 
-    password: '', 
-    confirmPassword: '',
-    companyName: '',
-    npiNumber: '', 
-    role: ''       
+    firstName: '', lastName: '', email: '', phone: '', password: '', 
+    confirmPassword: '', companyName: '', npiNumber: '', role: ''       
   });
   
-  // State for Verification Document
   const [verificationFile, setVerificationFile] = useState<File | null>(null);
-
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [isTokenValid, setIsTokenValid] = useState(false);
+
+  // --- TOKEN VERIFICATION (Using Secure RPC) ---
+  useEffect(() => {
+    async function verifyInvite() {
+        if (tokenParam && isTeamMember) {
+            setLoading(true);
+            // Call the secure SQL function we just created
+            const { data, error } = await supabase
+                .rpc('get_invite_details', { lookup_token: tokenParam });
+            
+            // RPC returns an array, get the first item
+            const invite = data && data[0];
+
+            if (invite && invite.status === 'invited') {
+                setForm(prev => ({ ...prev, email: invite.email }));
+                setIsTokenValid(true);
+            } else {
+                setError("This invitation link is invalid or has expired.");
+            }
+            setLoading(false);
+        }
+    }
+    verifyInvite();
+  }, [tokenParam, isTeamMember]);
 
   // --- FORMATTING HELPER ---
   const formatPhoneNumber = (value: string) => {
@@ -41,7 +63,6 @@ export default function Signup() {
     const areaCode = trimmed.substring(0, 3);
     const middle = trimmed.substring(3, 6);
     const last = trimmed.substring(6, 10);
-
     if (trimmed.length > 6) return `(${areaCode}) ${middle}-${last}`;
     else if (trimmed.length > 3) return `(${areaCode}) ${middle}`;
     else if (trimmed.length > 0) return `(${areaCode}`;
@@ -49,73 +70,37 @@ export default function Signup() {
   };
 
   const handlePhoneChange = (e: React.ChangeEvent<HTMLInputElement>) => {
-    const formatted = formatPhoneNumber(e.target.value);
-    setForm({ ...form, phone: formatted });
+    setForm({ ...form, phone: formatPhoneNumber(e.target.value) });
   };
 
-  // --- VALIDATION HELPERS ---
-  const validatePassword = (pwd: string) => {
-    const hasLength = pwd.length >= 8;
-    const hasUpper = /[A-Z]/.test(pwd);
-    const hasLower = /[a-z]/.test(pwd);
-    const hasNumber = /[0-9]/.test(pwd);
-
-    if (!hasLength || !hasUpper || !hasLower || !hasNumber) {
-      return "Password must be at least 8 characters long and include at least one uppercase letter, one lowercase letter, and one number.";
-    }
-    return null;
-  };
-
-  const validatePhone = (phone: string) => {
-    const cleanPhone = phone.replace(/\D/g, '');
-    if (cleanPhone.length !== 10) {
-      return "Please enter a valid 10-digit phone number.";
-    }
-    return null;
-  };
-
+  // --- SIGNUP HANDLER ---
   const handleSignup = async (e: React.FormEvent) => {
     e.preventDefault();
     setLoading(true);
     setError(null);
 
-    // 1. Password Check
-    const passwordError = validatePassword(form.password);
-    if (passwordError) {
-        setError(passwordError);
-        setLoading(false);
-        return;
+    if (form.password.length < 8) {
+        setError("Password must be at least 8 characters.");
+        setLoading(false); return;
     }
-
     if (form.password !== form.confirmPassword) {
-      setError("Passwords do not match.");
-      setLoading(false);
-      return;
+        setError("Passwords do not match.");
+        setLoading(false); return;
     }
 
-    // 2. Researcher Validations (Phone & Document)
-    if (isResearcher) {
-        const phoneError = validatePhone(form.phone);
-        if (phoneError) {
-            setError(phoneError);
-            setLoading(false);
-            return;
-        }
-        if (!verificationFile) {
-            setError("Please upload a document to verify your professional identity.");
-            setLoading(false);
-            return;
-        }
+    if (isResearcher && !verificationFile) {
+        setError("Please upload a verification document.");
+        setLoading(false); return;
     }
 
     try {
-      // 3. Create Auth User
+      // 1. Create Auth User
       const { data: authData, error: authError } = await supabase.auth.signUp({
         email: form.email,
         password: form.password,
         options: {
           data: {
-            role: isResearcher ? 'researcher' : 'patient',
+            role: isResearcher ? 'researcher' : isTeamMember ? 'team_member' : 'patient',
             first_name: form.firstName,
             last_name: form.lastName
           }
@@ -126,30 +111,18 @@ export default function Signup() {
       if (!authData.user) throw new Error("No user created");
 
       const userId = authData.user.id;
-      let verificationPath = null;
 
-      // 4. Upload Document (If Researcher)
-      if (isResearcher && verificationFile) {
-        const fileExt = verificationFile.name.split('.').pop();
-        const fileName = `${userId}/verification.${fileExt}`; // Path: user_id/filename
-        
-        const { error: uploadError } = await supabase.storage
-            .from('verifications')
-            .upload(fileName, verificationFile);
-
-        if (uploadError) {
-            console.error("File upload error:", uploadError);
-            // We alert but don't stop the flow, admin can request re-upload if needed
-        } else {
-            verificationPath = fileName;
-        }
-      }
-
-      // 5. Create Researcher Profile
+      // 2. Handle Specific Roles
       if (isResearcher) {
-        const { error: profileError } = await supabase
-          .from('researcher_profiles')
-          .insert({
+        let verificationPath = null;
+        if (verificationFile) {
+            const fileExt = verificationFile.name.split('.').pop();
+            const fileName = `${userId}/verification.${fileExt}`;
+            const { error: uploadError } = await supabase.storage.from('verifications').upload(fileName, verificationFile);
+            if (!uploadError) verificationPath = fileName;
+        }
+
+        const { error: profileError } = await supabase.from('researcher_profiles').insert({
             user_id: userId,
             first_name: form.firstName,
             last_name: form.lastName,
@@ -160,14 +133,24 @@ export default function Signup() {
             is_verified: false,         
             subscription_tier: 'free',
             email: form.email,
-            phone_number: form.phone.replace(/\D/g, ''), // Save clean digits
-            verification_doc_path: verificationPath // <--- Save file path reference
-          });
-
+            phone_number: form.phone.replace(/\D/g, ''),
+            verification_doc_path: verificationPath
+        });
         if (profileError) throw profileError;
         router.push('/dashboard/researcher');
-      } else {
-        router.push('/');
+      } 
+      
+      else if (isTeamMember && isTokenValid) {
+        // CALL SECURE RPC TO LINK ACCOUNT
+        const { error: linkError } = await supabase
+            .rpc('claim_invite', { lookup_token: tokenParam });
+
+        if (linkError) throw linkError;
+        router.push('/dashboard/researcher');
+      }
+      
+      else {
+        router.push('/dashboard/patient'); 
       }
 
     } catch (err: any) {
@@ -178,42 +161,32 @@ export default function Signup() {
     }
   };
 
+  // --- UI TEXT HELPERS ---
+  const getSidebarTitle = () => {
+      if (isResearcher) return "Accelerate your clinical research.";
+      if (isTeamMember) return "Collaborate on Clinical Trials.";
+      return "Advanced skin care starts here.";
+  };
+
+  const getSidebarDesc = () => {
+      if (isResearcher) return "Join the premier network of verified dermatology sites. Access high-intent patients and streamline enrollment.";
+      if (isTeamMember) return "Welcome to the team. Create your account to access the study dashboard securely.";
+      return "Access paid clinical trials and cutting-edge treatments before they hit the market.";
+  };
+
   return (
     <div className="min-h-screen flex flex-col lg:flex-row bg-white font-sans">
       
       {/* LEFT: BRANDING SIDEBAR */}
-      <div className={`hidden lg:flex w-[45%] p-12 flex-col justify-between relative overflow-hidden ${isResearcher ? 'bg-slate-900 text-white' : 'bg-indigo-600 text-white'}`}>
+      <div className={`hidden lg:flex w-[45%] p-12 flex-col justify-center relative overflow-hidden ${isResearcher || isTeamMember ? 'bg-slate-900 text-white' : 'bg-indigo-600 text-white'}`}>
         <div className="absolute inset-0 bg-[url('https://www.transparenttextures.com/patterns/cubes.png')] opacity-10"></div>
-        <div className="absolute top-0 right-0 w-96 h-96 bg-white/10 rounded-full blur-3xl -mr-20 -mt-20"></div>
-        
         <div className="relative z-10">
-          <Link href="/" className="flex items-center gap-2 mb-12 opacity-80 hover:opacity-100 transition-opacity">
-            <div className="w-8 h-8 bg-white/20 backdrop-blur-md rounded-lg flex items-center justify-center">
-              <Beaker className="h-5 w-5 text-white" />
-            </div>
-            <span className="font-bold text-lg tracking-tight">DermTrials</span>
+          <Link href="/" className="flex items-center gap-2 mb-8 opacity-80 hover:opacity-100 transition-opacity">
+             <span className="font-bold text-2xl tracking-tight">DermTrials</span>
           </Link>
           
-          <h1 className="text-5xl font-extrabold mb-6 leading-tight">
-            {isResearcher ? "Accelerate your clinical research." : "Advanced skin care starts here."}
-          </h1>
-          <p className="text-lg opacity-80 leading-relaxed max-w-md">
-            {isResearcher 
-              ? "Join the premier network of verified dermatology sites. Access high-intent patients and streamline enrollment." 
-              : "Access paid clinical trials and cutting-edge treatments before they hit the market."}
-          </p>
-        </div>
-
-        <div className="relative z-10">
-          <div className="flex items-center gap-4 bg-white/10 backdrop-blur-md p-4 rounded-xl border border-white/10">
-            <div className={`p-2 rounded-lg ${isResearcher ? 'bg-indigo-500' : 'bg-emerald-500'}`}>
-              <ShieldCheck className="h-6 w-6 text-white" />
-            </div>
-            <div>
-              <div className="font-bold text-sm">Secure & Compliant</div>
-              <div className="text-xs opacity-70">HIPAA Ready • 256-bit Encryption</div>
-            </div>
-          </div>
+          <h1 className="text-4xl font-extrabold mb-6 leading-tight">{getSidebarTitle()}</h1>
+          <p className="text-lg opacity-80 leading-relaxed max-w-md">{getSidebarDesc()}</p>
         </div>
       </div>
 
@@ -221,18 +194,14 @@ export default function Signup() {
       <div className="flex-1 flex items-center justify-center p-6 lg:p-16 overflow-y-auto">
         <div className="w-full max-w-lg space-y-8">
           
+          {/* Mobile Header */}
           <div className="lg:hidden text-center mb-8">
-            <Link href="/" className="inline-flex items-center gap-2 mb-6">
-              <div className="w-8 h-8 bg-indigo-600 rounded-lg flex items-center justify-center text-white">
-                <Beaker className="h-5 w-5" />
-              </div>
-              <span className="font-bold text-xl text-slate-900">DermTrials</span>
-            </Link>
+            <Link href="/" className="font-bold text-xl text-slate-900">DermTrials</Link>
           </div>
 
           <div>
             <h2 className="text-3xl font-bold text-slate-900 tracking-tight">
-              {isResearcher ? "Create Researcher Account" : "Create Patient Account"}
+              {isResearcher ? "Create Researcher Account" : isTeamMember ? "Join Your Team" : "Create Patient Account"}
             </h2>
             <p className="text-slate-500 mt-2 text-sm">
               Already have an account? <Link href="/login" className="text-indigo-600 font-bold hover:text-indigo-700 transition-colors">Sign in</Link>
@@ -247,96 +216,69 @@ export default function Signup() {
           )}
 
           <form onSubmit={handleSignup} className="space-y-5">
-            
             {/* NAME ROW */}
             <div className="grid grid-cols-1 sm:grid-cols-2 gap-5">
               <div>
                 <label className="block text-xs font-bold text-slate-700 uppercase tracking-wide mb-1.5">First Name</label>
-                <input 
-                  type="text" required placeholder="Jane" 
-                  className="w-full p-3 bg-white border border-slate-200 rounded-lg focus:ring-2 focus:ring-indigo-500 outline-none transition-all text-slate-900 placeholder:text-slate-400 font-medium"
-                  value={form.firstName} onChange={e => setForm({...form, firstName: e.target.value})}
-                />
+                <input type="text" required placeholder="Jane" className="w-full p-3 bg-white border border-slate-200 rounded-lg focus:ring-2 focus:ring-indigo-500 outline-none transition-all text-slate-900 placeholder:text-slate-400 font-medium" value={form.firstName} onChange={e => setForm({...form, firstName: e.target.value})} />
               </div>
               <div>
                 <label className="block text-xs font-bold text-slate-700 uppercase tracking-wide mb-1.5">Last Name</label>
-                <input 
-                  type="text" required placeholder="Doe" 
-                  className="w-full p-3 bg-white border border-slate-200 rounded-lg focus:ring-2 focus:ring-indigo-500 outline-none transition-all text-slate-900 placeholder:text-slate-400 font-medium"
-                  value={form.lastName} onChange={e => setForm({...form, lastName: e.target.value})}
-                />
+                <input type="text" required placeholder="Doe" className="w-full p-3 bg-white border border-slate-200 rounded-lg focus:ring-2 focus:ring-indigo-500 outline-none transition-all text-slate-900 placeholder:text-slate-400 font-medium" value={form.lastName} onChange={e => setForm({...form, lastName: e.target.value})} />
               </div>
             </div>
 
-            {/* RESEARCHER SPECIFIC BLOCK */}
+            {/* RESEARCHER SPECIFIC BLOCK (Hidden for Team Members) */}
             {isResearcher && (
               <div className="pt-2 pb-2 space-y-5">
                 <div>
                   <label className="block text-xs font-bold text-slate-700 uppercase tracking-wide mb-1.5">Organization</label>
                   <div className="relative">
                     <Building2 className="absolute left-3 top-3 h-5 w-5 text-slate-400" />
-                    <input 
-                      type="text" required placeholder="e.g. Phoenix Dermatology Center" 
-                      className="w-full pl-10 p-3 bg-white border border-slate-200 rounded-lg focus:ring-2 focus:ring-indigo-500 outline-none transition-all text-slate-900"
-                      value={form.companyName} onChange={e => setForm({...form, companyName: e.target.value})}
-                    />
+                    <input type="text" required placeholder="e.g. Phoenix Dermatology Center" className="w-full pl-10 p-3 bg-white border border-slate-200 rounded-lg focus:ring-2 focus:ring-indigo-500 outline-none transition-all text-slate-900" value={form.companyName} onChange={e => setForm({...form, companyName: e.target.value})} />
                   </div>
                 </div>
-
                 <div className="grid grid-cols-1 sm:grid-cols-2 gap-5">
                   <div>
                     <label className="block text-xs font-bold text-slate-700 uppercase tracking-wide mb-1.5">Role / Title</label>
                     <div className="relative">
                       <UserCircle className="absolute left-3 top-3 h-5 w-5 text-slate-400" />
-                      <input 
-                        type="text" required placeholder="Principal Investigator" 
-                        className="w-full pl-10 p-3 bg-white border border-slate-200 rounded-lg focus:ring-2 focus:ring-indigo-500 outline-none transition-all text-slate-900"
-                        value={form.role} onChange={e => setForm({...form, role: e.target.value})}
-                      />
+                      <input type="text" required placeholder="Principal Investigator" className="w-full pl-10 p-3 bg-white border border-slate-200 rounded-lg focus:ring-2 focus:ring-indigo-500 outline-none transition-all text-slate-900" value={form.role} onChange={e => setForm({...form, role: e.target.value})} />
                     </div>
                   </div>
                   <div>
-                    <div className="flex justify-between items-center mb-1.5">
-                        <label className="text-xs font-bold text-slate-700 uppercase tracking-wide">NPI Number</label>
-                        <span className="text-[10px] text-slate-400 font-medium bg-slate-100 px-1.5 py-0.5 rounded">Optional</span>
-                    </div>
+                    <div className="flex justify-between items-center mb-1.5"><label className="text-xs font-bold text-slate-700 uppercase tracking-wide">NPI Number</label><span className="text-[10px] text-slate-400 font-medium bg-slate-100 px-1.5 py-0.5 rounded">Optional</span></div>
                     <div className="relative">
                       <Hash className="absolute left-3 top-3 h-5 w-5 text-slate-400" />
-                      <input 
-                        type="text" placeholder="10-digit ID" 
-                        className="w-full pl-10 p-3 bg-white border border-slate-200 rounded-lg focus:ring-2 focus:ring-indigo-500 outline-none transition-all text-slate-900"
-                        value={form.npiNumber} onChange={e => setForm({...form, npiNumber: e.target.value})}
-                      />
+                      <input type="text" placeholder="10-digit ID" className="w-full pl-10 p-3 bg-white border border-slate-200 rounded-lg focus:ring-2 focus:ring-indigo-500 outline-none transition-all text-slate-900" value={form.npiNumber} onChange={e => setForm({...form, npiNumber: e.target.value})} />
                     </div>
                   </div>
                 </div>
               </div>
             )}
 
-            {/* CONTACT ROW (Email & Phone) */}
-            <div className="grid grid-cols-1 sm:grid-cols-2 gap-5">
+            {/* CONTACT ROW */}
+            <div className={`grid ${isResearcher ? 'grid-cols-1 sm:grid-cols-2' : 'grid-cols-1'} gap-5`}>
                 <div>
                     <label className="block text-xs font-bold text-slate-700 uppercase tracking-wide mb-1.5">Email Address</label>
                     <div className="relative">
                         <Mail className="absolute left-3 top-3 h-5 w-5 text-slate-400" />
                         <input 
                             type="email" required placeholder="name@company.com" 
-                            className="w-full pl-10 p-3 bg-white border border-slate-200 rounded-lg focus:ring-2 focus:ring-indigo-500 outline-none transition-all text-slate-900"
+                            // Lock if team member with valid token
+                            disabled={isTeamMember && isTokenValid}
+                            className={`w-full pl-10 p-3 border border-slate-200 rounded-lg focus:ring-2 focus:ring-indigo-500 outline-none transition-all text-slate-900 ${isTeamMember && isTokenValid ? 'bg-slate-100 text-slate-500 cursor-not-allowed' : 'bg-white'}`}
                             value={form.email} onChange={e => setForm({...form, email: e.target.value})}
                         />
+                        {isTeamMember && isTokenValid && <Lock className="absolute right-3 top-3 h-4 w-4 text-slate-400" />}
                     </div>
                 </div>
-                {/* PHONE INPUT - Only for Researcher */}
                 {isResearcher && (
                     <div>
                         <label className="block text-xs font-bold text-slate-700 uppercase tracking-wide mb-1.5">Phone Number</label>
                         <div className="relative">
                             <Phone className="absolute left-3 top-3 h-5 w-5 text-slate-400" />
-                            <input 
-                                type="tel" required placeholder="(555) 123-4567" 
-                                className="w-full pl-10 p-3 bg-white border border-slate-200 rounded-lg focus:ring-2 focus:ring-indigo-500 outline-none transition-all text-slate-900"
-                                value={form.phone} onChange={handlePhoneChange} // Uses Formatter
-                            />
+                            <input type="tel" required placeholder="(555) 123-4567" className="w-full pl-10 p-3 bg-white border border-slate-200 rounded-lg focus:ring-2 focus:ring-indigo-500 outline-none transition-all text-slate-900" value={form.phone} onChange={handlePhoneChange} />
                         </div>
                     </div>
                 )}
@@ -348,30 +290,15 @@ export default function Signup() {
                 <label className="block text-xs font-bold text-slate-700 uppercase tracking-wide mb-1.5">Password</label>
                 <div className="relative">
                   <Lock className="absolute left-3 top-3 h-5 w-5 text-slate-400" />
-                  <input 
-                    type="password" required placeholder="8+ chars" 
-                    className="w-full pl-10 p-3 bg-white border border-slate-200 rounded-lg focus:ring-2 focus:ring-indigo-500 outline-none transition-all text-slate-900"
-                    value={form.password} onChange={e => setForm({...form, password: e.target.value})}
-                  />
+                  <input type="password" required placeholder="8+ chars" className="w-full pl-10 p-3 bg-white border border-slate-200 rounded-lg focus:ring-2 focus:ring-indigo-500 outline-none transition-all text-slate-900" value={form.password} onChange={e => setForm({...form, password: e.target.value})} />
                 </div>
               </div>
               <div>
                 <label className="block text-xs font-bold text-slate-700 uppercase tracking-wide mb-1.5">Confirm Password</label>
                 <div className="relative">
                   <Lock className="absolute left-3 top-3 h-5 w-5 text-slate-400" />
-                  <input 
-                    type="password" required placeholder="Confirm" 
-                    className={`w-full pl-10 p-3 bg-white border rounded-lg focus:ring-2 outline-none transition-all text-slate-900 ${
-                      form.confirmPassword && form.password !== form.confirmPassword 
-                      ? 'border-red-300 focus:ring-red-200' 
-                      : 'border-slate-200 focus:ring-indigo-500'
-                    }`}
-                    value={form.confirmPassword}
-                    onChange={e => setForm({...form, confirmPassword: e.target.value})}
-                  />
-                  {form.confirmPassword && form.password === form.confirmPassword && (
-                    <CheckCircle2 className="absolute right-3 top-3 h-5 w-5 text-emerald-500 animate-in fade-in zoom-in" />
-                  )}
+                  <input type="password" required placeholder="Confirm" className={`w-full pl-10 p-3 bg-white border rounded-lg focus:ring-2 outline-none transition-all text-slate-900 ${form.confirmPassword && form.password !== form.confirmPassword ? 'border-red-300 focus:ring-red-200' : 'border-slate-200 focus:ring-indigo-500'}`} value={form.confirmPassword} onChange={e => setForm({...form, confirmPassword: e.target.value})} />
+                  {form.confirmPassword && form.password === form.confirmPassword && <CheckCircle2 className="absolute right-3 top-3 h-5 w-5 text-emerald-500 animate-in fade-in zoom-in" />}
                 </div>
               </div>
             </div>
@@ -414,19 +341,18 @@ export default function Signup() {
               disabled={loading}
               className={`w-full py-4 rounded-xl font-bold text-white text-lg flex items-center justify-center gap-2 shadow-lg hover:shadow-xl hover:-translate-y-0.5 transition-all duration-200 ${
                 loading ? 'opacity-70 cursor-not-allowed' : ''
-              } ${isResearcher ? 'bg-slate-900 hover:bg-slate-800' : 'bg-indigo-600 hover:bg-indigo-700'}`}
+              } ${isResearcher || isTeamMember ? 'bg-slate-900 hover:bg-slate-800' : 'bg-indigo-600 hover:bg-indigo-700'}`}
             >
               {loading ? <Loader2 className="h-6 w-6 animate-spin" /> : <>Create Account <ArrowRight className="h-5 w-5" /></>}
             </button>
           </form>
 
           <p className="text-xs text-center text-slate-400 leading-relaxed max-w-sm mx-auto">
-            By joining, you agree to our Terms of Service and Privacy Policy.
+            By joining, you agree to our <Link href="/terms" className="underline hover:text-slate-600">Terms of Service</Link> and <Link href="/privacy" className="underline hover:text-slate-600">Privacy Policy</Link>.
             {isResearcher && <span className="block mt-2 text-amber-600 font-medium">⚠️ Manual verification required for all research sites.</span>}
           </p>
         </div>
       </div>
-
     </div>
   );
 }

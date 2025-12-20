@@ -22,13 +22,13 @@ export default function Login() {
   const [mfaCode, setMfaCode] = useState('');
   const [factorId, setFactorId] = useState('');
 
-  // 1. ON LOAD: CHECK IF USER IS ALREADY LOGGED IN (e.g. from Magic Link)
+  // 1. ON LOAD: CHECK IF USER IS ALREADY LOGGED IN
   useEffect(() => {
     async function initSessionCheck() {
       const { data: { session } } = await supabase.auth.getSession();
       
       if (session) {
-        // User is logged in (Authentication). Now check Authorization & MFA.
+        // User is logged in. Check MFA & Role.
         await checkMfaAndRedirect();
       } else {
         setLoading(false); // No session, show login form
@@ -61,7 +61,7 @@ export default function Login() {
       }
     }
 
-    // C. If MFA is satisfied (or not set up), check Role & Redirect
+    // C. If MFA is satisfied, check Role & Redirect
     await finalizeRedirect();
   };
 
@@ -75,7 +75,6 @@ export default function Login() {
     try {
       if (useMagicLink) {
         // --- MAGIC LINK FLOW ---
-        // Vital: Redirect back to THIS page (/login) so we can run the MFA check above
         const { error } = await supabase.auth.signInWithOtp({
           email,
           options: { emailRedirectTo: `${window.location.origin}/login` },
@@ -117,21 +116,39 @@ export default function Login() {
       }
   };
 
-  // 5. FINAL REDIRECT LOGIC
+  // 5. FINAL REDIRECT LOGIC (UPDATED FOR COORDINATORS)
   const finalizeRedirect = async () => {
       const { data: { user } } = await supabase.auth.getUser();
       if (!user) return;
 
-      // Check Admin Table
-      const { data: admin } = await supabase.from('admins').select('role').eq('user_id', user.id).single();
+      // 1. Check Admin Table
+      // Use maybeSingle() to avoid errors if not found
+      const { data: admin } = await supabase.from('admins').select('role').eq('user_id', user.id).maybeSingle();
       if (admin) {
           router.push('/admin/system');
-      } else {
-          // Check Researcher Table
-          const { data: researcher } = await supabase.from('researcher_profiles').select('id').eq('user_id', user.id).single();
-          if (researcher) router.push('/dashboard/researcher');
-          else router.push('/'); 
+          router.refresh();
+          return;
+      } 
+      
+      // 2. Check Researcher Profile (PI)
+      const { data: researcher } = await supabase.from('researcher_profiles').select('id').eq('user_id', user.id).maybeSingle();
+      if (researcher) {
+          router.push('/dashboard/researcher');
+          router.refresh();
+          return;
       }
+
+      // 3. NEW: Check Team Member (Coordinator)
+      // This was likely missing before!
+      const { data: member } = await supabase.from('team_members').select('id').eq('user_id', user.id).maybeSingle();
+      if (member) {
+          router.push('/dashboard/researcher');
+          router.refresh();
+          return;
+      }
+
+      // 4. Default / Candidate Dashboard
+      router.push('/dashboard/candidate'); 
       router.refresh();
   };
 

@@ -11,17 +11,27 @@ import {
   ArrowLeft, ChevronDown, ChevronUp, Clock, Check, Undo,
   FileText, ListChecks, BookOpen, ShieldAlert, Building2, User, X,
   ShieldCheck, MapPin, FlaskConical, ChevronRight, Mail, Phone, Trash2, Eye,
-  Lock, QrCode, Smartphone
+  Lock, QrCode, Smartphone, MessageCircle, HelpCircle
 } from "lucide-react";
 
 const wait = (ms: number) => new Promise(resolve => setTimeout(resolve, ms));
+
+// --- HELPER: FORMAT CATEGORY ---
+const formatCategory = (cat: string) => {
+    switch(cat) {
+        case 'missing_trial': return 'Trial Not Found';
+        case 'claim_dispute': return 'Claim Dispute';
+        case '404_error': return 'Broken Link / 404';
+        default: return 'Support Request';
+    }
+};
 
 export default function SystemOps() {
   const router = useRouter();
   const searchParams = useSearchParams();
   
   // Initialize tab from URL or default to 'trials'
-  const [activeTab, setActiveTab] = useState<'trials' | 'researchers' | 'verified' | 'security'>('trials');
+  const [activeTab, setActiveTab] = useState<'trials' | 'researchers' | 'verified' | 'security' | 'support'>('trials');
   
   // Trial State
   const [syncLoading, setSyncLoading] = useState(false);
@@ -46,6 +56,9 @@ export default function SystemOps() {
   const [verifyCode, setVerifyCode] = useState('');
   const [factorId, setFactorId] = useState('');
   const [mfaError, setMfaError] = useState('');
+
+  // Support Tickets State
+  const [tickets, setTickets] = useState<any[]>([]);
 
   // Document Viewer State (Modal)
   const [viewDocUrl, setViewDocUrl] = useState<string | null>(null);
@@ -78,18 +91,19 @@ export default function SystemOps() {
       fetchVerifiedResearchers();
       fetchSystemStats();
       fetchMfaStatus();
+      fetchTickets(); // Load Support Tickets
 
       // Set Active Tab from URL
       const tabParam = searchParams.get('tab');
-      if (tabParam === 'researchers' || tabParam === 'verified' || tabParam === 'trials' || tabParam === 'security') {
-          setActiveTab(tabParam);
+      if (tabParam === 'researchers' || tabParam === 'verified' || tabParam === 'trials' || tabParam === 'security' || tabParam === 'support') {
+          setActiveTab(tabParam as any);
       }
     }
     checkUserAndLoad();
   }, [router, searchParams]);
 
   // --- TAB HANDLER ---
-  const handleTabChange = (tab: 'trials' | 'researchers' | 'verified' | 'security') => {
+  const handleTabChange = (tab: 'trials' | 'researchers' | 'verified' | 'security' | 'support') => {
       setActiveTab(tab);
       const newUrl = new URL(window.location.href);
       newUrl.searchParams.set('tab', tab);
@@ -152,6 +166,22 @@ export default function SystemOps() {
         .order('company_name', { ascending: true });
 
     if (data) setVerifiedList(data);
+  };
+
+  // --- SUPPORT TICKET FETCHING ---
+  const fetchTickets = async () => {
+      const { data } = await supabase
+        .from('support_tickets')
+        .select('*')
+        .order('created_at', { ascending: false });
+      
+      if (data) setTickets(data);
+  };
+
+  const resolveTicket = async (id: string) => {
+      if(!confirm("Mark this ticket as resolved?")) return;
+      await supabase.from('support_tickets').update({ status: 'resolved' }).eq('id', id);
+      fetchTickets();
   };
 
   // --- MFA LOGIC ---
@@ -429,6 +459,10 @@ export default function SystemOps() {
             </button>
             <button onClick={() => handleTabChange('verified')} className={`pb-4 px-2 text-sm font-bold border-b-2 transition-colors whitespace-nowrap ${activeTab === 'verified' ? 'border-indigo-600 text-indigo-600' : 'border-transparent text-slate-500 hover:text-slate-700'}`}>
                 Active Sites ({verifiedList.length})
+            </button>
+            <button onClick={() => handleTabChange('support')} className={`pb-4 px-2 text-sm font-bold border-b-2 transition-colors whitespace-nowrap flex items-center gap-2 ${activeTab === 'support' ? 'border-amber-600 text-amber-700' : 'border-transparent text-slate-500 hover:text-slate-700'}`}>
+                <HelpCircle className="h-4 w-4" /> Support Inbox
+                {tickets.filter(t => t.status === 'open').length > 0 && <span className="bg-red-500 text-white text-[10px] px-1.5 py-0.5 rounded-full">{tickets.filter(t => t.status === 'open').length}</span>}
             </button>
             <button onClick={() => handleTabChange('security')} className={`pb-4 px-2 text-sm font-bold border-b-2 transition-colors whitespace-nowrap flex items-center gap-2 ${activeTab === 'security' ? 'border-emerald-600 text-emerald-700' : 'border-transparent text-slate-500 hover:text-slate-700'}`}>
                 <ShieldCheck className="h-4 w-4" /> Security & MFA
@@ -720,7 +754,56 @@ export default function SystemOps() {
             </div>
         )}
 
-        {/* --- TAB 4: SECURITY (MFA ENROLLMENT) --- */}
+        {/* --- NEW TAB 4: SUPPORT TICKETS --- */}
+        {activeTab === 'support' && (
+            <div className="max-w-4xl">
+                <div className="rounded-2xl bg-white shadow-sm border border-slate-200 overflow-hidden">
+                    <div className="p-6 border-b border-slate-100 flex items-center justify-between">
+                        <h3 className="font-bold text-slate-900 flex items-center gap-2"><MessageCircle className="h-5 w-5 text-amber-600" /> Support Tickets</h3>
+                        <button onClick={fetchTickets} className="text-xs font-bold text-indigo-600 bg-indigo-50 px-3 py-1.5 rounded-lg hover:bg-indigo-100 transition-colors">Refresh</button>
+                    </div>
+                    <div className="divide-y divide-slate-100">
+                        {tickets.length === 0 ? (
+                            <div className="p-12 text-center text-slate-400">
+                                <CheckCircle className="h-12 w-12 mx-auto mb-4 opacity-20" />
+                                <p>No open tickets.</p>
+                            </div>
+                        ) : (
+                            tickets.map((ticket) => (
+                                <div key={ticket.id} className={`p-6 hover:bg-slate-50 transition-all ${ticket.status === 'resolved' ? 'opacity-50 grayscale' : ''}`}>
+                                    <div className="flex justify-between items-start mb-2">
+                                        <div>
+                                            <div className="flex items-center gap-2 mb-1">
+                                                <span className={`text-[10px] font-bold px-2 py-0.5 rounded uppercase tracking-wide ${ticket.category === 'claim_dispute' ? 'bg-red-100 text-red-700' : 'bg-blue-100 text-blue-700'}`}>
+                                                    {formatCategory(ticket.category)}
+                                                </span>
+                                                <span className="text-xs text-slate-400">{new Date(ticket.created_at).toLocaleString()}</span>
+                                            </div>
+                                            <h4 className="font-bold text-slate-900">{ticket.subject}</h4>
+                                            <p className="text-sm text-slate-600 mt-2 bg-slate-50 p-3 rounded-lg border border-slate-100">{ticket.message}</p>
+                                        </div>
+                                        {ticket.status === 'open' && (
+                                            <button 
+                                                onClick={() => resolveTicket(ticket.id)}
+                                                className="bg-white border border-emerald-200 text-emerald-700 px-4 py-2 rounded-lg text-xs font-bold hover:bg-emerald-50 transition-colors shadow-sm flex items-center gap-1"
+                                            >
+                                                <Check className="h-3 w-3" /> Resolve
+                                            </button>
+                                        )}
+                                    </div>
+                                    <div className="flex items-center gap-4 text-xs text-slate-500 mt-4 pt-4 border-t border-slate-100">
+                                        <div className="flex items-center gap-1 font-bold"><User className="h-3 w-3" /> {ticket.researcher_name}</div>
+                                        <div className="flex items-center gap-1"><Mail className="h-3 w-3" /> {ticket.researcher_email}</div>
+                                    </div>
+                                </div>
+                            ))
+                        )}
+                    </div>
+                </div>
+            </div>
+        )}
+
+        {/* --- TAB 5: SECURITY (MFA ENROLLMENT) --- */}
         {activeTab === 'security' && (
             <div className="max-w-2xl">
                 <div className="rounded-2xl bg-white shadow-sm border border-slate-200 overflow-hidden mb-8">

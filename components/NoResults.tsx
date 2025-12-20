@@ -4,7 +4,7 @@ import { useEffect, useState } from "react";
 import { supabase } from "@/lib/supabase";
 import { BellRing, Check } from "lucide-react";
 import TrialCard from "./TrialCard";
-import type { Trial } from "./TrialGrid"; // Import the type
+import type { Trial } from "./TrialResultsList"; // Import the type
 
 export default function NoResults({ query, suggestedTrials }: { query: string, suggestedTrials: Trial[] }) {
   const [email, setEmail] = useState("");
