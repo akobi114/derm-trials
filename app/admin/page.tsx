@@ -35,7 +35,7 @@ const calculateTier = (lead: any, questions: any[]) => {
     let unsure = 0;
     const total = questions.length;
 
-    questions.forEach((q, i) => {
+    questions.forEach((q: any, i: number) => {
         const ans = lead.answers && lead.answers[i];
         if (ans === q.correct_answer) {
              correct++;
@@ -130,7 +130,7 @@ export default function AdminDashboard() {
 
       // D. Process Active Sites
       const sites = (claims || []).map((claim: any) => {
-          const leadStatuses = rawLeads.filter(l => 
+          const leadStatuses = rawLeads.filter((l: any) => 
               l.trial_id === claim.nct_id && 
               isSameLocation(l.site_city, l.site_state, claim.site_location?.city, claim.site_location?.state)
           );
@@ -139,14 +139,14 @@ export default function AdminDashboard() {
               ...claim,
               stats: {
                   total: leadStatuses.length,
-                  new: leadStatuses.filter(l => l.site_status === 'New').length,
-                  screening: leadStatuses.filter(l => l.site_status === 'Contacted').length,
-                  scheduled: leadStatuses.filter(l => l.site_status === 'Scheduled').length,
-                  enrolled: leadStatuses.filter(l => l.site_status === 'Enrolled').length
+                  new: leadStatuses.filter((l: any) => l.site_status === 'New').length,
+                  screening: leadStatuses.filter((l: any) => l.site_status === 'Contacted').length,
+                  scheduled: leadStatuses.filter((l: any) => l.site_status === 'Scheduled').length,
+                  enrolled: leadStatuses.filter((l: any) => l.site_status === 'Enrolled').length
               }
           };
       });
-      setActiveSites(sites.sort((a,b) => b.stats.total - a.stats.total));
+      setActiveSites(sites.sort((a: any, b: any) => b.stats.total - a.stats.total));
 
       // E. Process Leads
       const enrichedLeads = rawLeads.map((lead: any) => {
@@ -176,7 +176,7 @@ export default function AdminDashboard() {
           const key = `${lead.trial_id}-${lead.site_city}-${lead.site_state}`;
           if (!opportunities[key]) {
               // Find existing note for this site
-              const existingNote = siteNotes?.find(n => 
+              const existingNote = siteNotes?.find((n: any) => 
                   n.nct_id === lead.trial_id && 
                   isSameLocation(lead.site_city, lead.site_state, n.city, n.state)
               );
@@ -210,7 +210,7 @@ export default function AdminDashboard() {
       if (!loading && activeSites.length > 0) {
           const claimIdFromUrl = searchParams.get('claim_id');
           if (claimIdFromUrl) {
-              const claimToView = activeSites.find(c => c.id === claimIdFromUrl);
+              const claimToView = activeSites.find((c: any) => c.id === claimIdFromUrl);
               if (claimToView) setViewingClaim(claimToView);
           }
       }
@@ -281,7 +281,7 @@ export default function AdminDashboard() {
   const updateLeadNote = async (leadId: string, text: string) => {
       setSavingNote(leadId); 
       await supabase.from('leads').update({ admin_notes: text }).eq('id', leadId);
-      setLeads(current => current.map(l => l.id === leadId ? { ...l, admin_notes: text } : l));
+      setLeads((current: any[]) => current.map((l: any) => l.id === leadId ? { ...l, admin_notes: text } : l));
       setSavingNote(null);
   };
 
@@ -296,7 +296,7 @@ export default function AdminDashboard() {
           notes: text 
       }, { onConflict: 'nct_id, city, state' });
 
-      setSiteOpportunities(current => current.map(o => o.id === oppId ? { ...o, admin_note: text } : o));
+      setSiteOpportunities((current: any[]) => current.map((o: any) => o.id === oppId ? { ...o, admin_note: text } : o));
       setSavingSiteNote(null);
   };
 
@@ -305,7 +305,7 @@ export default function AdminDashboard() {
       if (!selectedLead) return; 
       setSavingNote(selectedLead.id); 
       await supabase.from('leads').update({ admin_notes: noteText }).eq('id', selectedLead.id); 
-      setLeads(l => l.map(x => x.id === selectedLead.id ? { ...x, admin_notes: noteText } : x)); 
+      setLeads((l: any[]) => l.map((x: any) => x.id === selectedLead.id ? { ...x, admin_notes: noteText } : x)); 
       setSavingNote(null); 
   };
 
@@ -338,13 +338,12 @@ export default function AdminDashboard() {
                 <div className="p-6 border-b border-slate-200 bg-slate-50 flex justify-between items-center">
                     <h3 className="font-bold text-slate-900 flex items-center gap-2"><Mail className="h-5 w-5 text-indigo-600" /> Outreach Queue</h3>
                     <div className="flex items-center gap-4">
-                        <span className="text-xs font-bold text-slate-500 bg-white border border-slate-200 px-3 py-1 rounded-full">{leads.filter(l => !l.is_claimed).length} Pending</span>
+                        <span className="text-xs font-bold text-slate-500 bg-white border border-slate-200 px-3 py-1 rounded-full">{leads.filter((l: any) => !l.is_claimed).length} Pending</span>
                     </div>
                 </div>
                 <div className="divide-y divide-slate-100">
-                    {leads.filter(l => !l.is_claimed).map(lead => {
+                    {leads.filter((l: any) => !l.is_claimed).map((lead: any) => {
                         const tier = calculateTier(lead, lead.trial_questions);
-                        const TierIcon = tier?.icon || HelpCircle;
                         const strategy = getContactStrategy(lead);
                         
                         return (
@@ -443,7 +442,7 @@ export default function AdminDashboard() {
                             </div>
                         );
                     })}
-                    {leads.filter(l => !l.is_claimed).length === 0 && <div className="p-10 text-center text-slate-400 italic">No pending leads.</div>}
+                    {leads.filter((l: any) => !l.is_claimed).length === 0 && <div className="p-10 text-center text-slate-400 italic">No pending leads.</div>}
                 </div>
             </div>
         )}
@@ -458,7 +457,7 @@ export default function AdminDashboard() {
                     </div>
                 </div>
                 <div className="divide-y divide-slate-100">
-                    {siteOpportunities.map((opp) => {
+                    {siteOpportunities.map((opp: any) => {
                         const representativeLead = opp.leads[0];
                         const strategy = getContactStrategy(representativeLead);
                         
@@ -551,7 +550,7 @@ export default function AdminDashboard() {
         {activeTab === 'active_sites' && (
             <div className="bg-white rounded-2xl shadow-sm border border-slate-200 overflow-hidden">
                 <div className="overflow-x-auto"><table className="w-full text-left text-sm"><thead className="bg-slate-50 border-b border-slate-200 text-slate-500 font-bold uppercase text-xs"><tr><th className="px-6 py-4">Trial Info</th><th className="px-6 py-4">Researcher</th><th className="px-6 py-4">Status Breakdown</th><th className="px-6 py-4">Total</th><th className="px-6 py-4">Actions</th></tr></thead><tbody className="divide-y divide-slate-100">
-                    {activeSites.map((claim) => (
+                    {activeSites.map((claim: any) => (
                         <tr key={claim.id} className="hover:bg-slate-50/50 transition-colors">
                             <td className="px-6 py-4"><div className="font-bold text-slate-900">{claim.trials?.title}</div><div className="text-xs text-slate-500 font-mono mt-1">{claim.nct_id} • {claim.site_location?.city}, {claim.site_location?.state}</div></td>
                             <td className="px-6 py-4"><div className="font-bold text-slate-700">{claim.researcher_profiles?.company_name}</div><div className="text-xs text-slate-500">{claim.researcher_profiles?.full_name}</div></td>
@@ -786,16 +785,16 @@ const GodModeView = ({ claim, onBack }: { claim: any, onBack: () => void }) => {
     // --- ANALYTICS CALCULATIONS ---
     const analyticsData = useMemo(() => {
         const totalLeads = leads.length;
-        const enrolled = leads.filter(l => l.site_status === 'Enrolled').length;
-        const notEligible = leads.filter(l => l.site_status === 'Not Eligible').length;
-        const scheduled = leads.filter(l => l.site_status === 'Scheduled').length;
+        const enrolled = leads.filter((l: any) => l.site_status === 'Enrolled').length;
+        const notEligible = leads.filter((l: any) => l.site_status === 'Not Eligible').length;
+        const scheduled = leads.filter((l: any) => l.site_status === 'Scheduled').length;
         const estimatedViews = Math.round(totalLeads * 18.5); 
         const estimatedStarts = Math.round(totalLeads * 2.5);
         const dropOffRate = estimatedStarts > 0 ? Math.round(((estimatedStarts - totalLeads) / estimatedStarts) * 100) : 0;
         const conversionRate = estimatedViews > 0 ? ((enrolled / estimatedViews) * 100).toFixed(2) : "0.00";
         const passRate = totalLeads > 0 ? Math.round(((totalLeads - notEligible) / totalLeads) * 100) : 0;
         const failureCounts: Record<string, number> = {};
-        leads.forEach(lead => {
+        leads.forEach((lead: any) => {
             if (Array.isArray(lead.answers) && questions.length > 0) {
                 lead.answers.forEach((ans: string, index: number) => {
                     if (questions[index] && ans !== questions[index].correct_answer) {
@@ -805,7 +804,7 @@ const GodModeView = ({ claim, onBack }: { claim: any, onBack: () => void }) => {
                 });
             }
         });
-        const topFailures = Object.entries(failureCounts).sort(([,a], [,b]) => b - a).slice(0, 4).map(([q, count]) => ({ question: q, count }));
+        const topFailures = Object.entries(failureCounts).sort(([,a]: any, [,b]: any) => b - a).slice(0, 4).map(([q, count]: any) => ({ question: q, count }));
         return { totalLeads, enrolled, scheduled, notEligible, estimatedViews, estimatedStarts, dropOffRate, conversionRate, passRate, topFailures };
     }, [leads, questions]);
 
@@ -813,13 +812,13 @@ const GodModeView = ({ claim, onBack }: { claim: any, onBack: () => void }) => {
         async function fetchGodLeads() {
             const { data } = await supabase.from('leads').select('*').eq('trial_id', claim.nct_id).eq('site_city', claim.site_location?.city).eq('site_state', claim.site_location?.state).order('created_at', { ascending: false });
             if (data) {
-                const leadIds = data.map(l => l.id);
+                const leadIds = data.map((l: any) => l.id);
                 let counts: any = {};
                 if (leadIds.length > 0) {
                     const { data: msgs } = await supabase.from('messages').select('lead_id').eq('is_read', false).eq('sender_role', 'patient').in('lead_id', leadIds);
-                    msgs?.forEach(m => { counts[m.lead_id] = (counts[m.lead_id] || 0) + 1; });
+                    msgs?.forEach((m: any) => { counts[m.lead_id] = (counts[m.lead_id] || 0) + 1; });
                 }
-                setLeads(data.map(l => ({ ...l, unread_count: counts[l.id] || 0 })));
+                setLeads(data.map((l: any) => ({ ...l, unread_count: counts[l.id] || 0 })));
             }
         }
         fetchGodLeads();
@@ -827,18 +826,18 @@ const GodModeView = ({ claim, onBack }: { claim: any, onBack: () => void }) => {
 
     // === REALTIME LISTENERS ===
     useEffect(() => {
-        const msgChannel = supabase.channel('god-mode-messages').on('postgres_changes', { event: 'INSERT', schema: 'public', table: 'messages' }, (payload) => {
+        const msgChannel = supabase.channel('god-mode-messages').on('postgres_changes', { event: 'INSERT', schema: 'public', table: 'messages' }, (payload: any) => {
             if (payload.new.sender_role === 'patient') {
                 if (selectedLeadId !== payload.new.lead_id) {
-                    setLeads(prev => prev.map(l => l.id === payload.new.lead_id ? { ...l, unread_count: (l.unread_count || 0) + 1 } : l));
+                    setLeads((prev: any[]) => prev.map((l: any) => l.id === payload.new.lead_id ? { ...l, unread_count: (l.unread_count || 0) + 1 } : l));
                 } else {
-                    setMessages(prev => [...prev, payload.new]);
+                    setMessages((prev: any[]) => [...prev, payload.new]);
                     if (!isReadOnly) supabase.from('messages').update({ is_read: true }).eq('id', payload.new.id);
                 }
             }
         }).subscribe();
-        const leadChannel = supabase.channel('god-mode-leads').on('postgres_changes', { event: 'UPDATE', schema: 'public', table: 'leads' }, (payload) => {
-            setLeads(prev => prev.map(l => l.id === payload.new.id ? { ...l, ...payload.new } : l));
+        const leadChannel = supabase.channel('god-mode-leads').on('postgres_changes', { event: 'UPDATE', schema: 'public', table: 'leads' }, (payload: any) => {
+            setLeads((prev: any[]) => prev.map((l: any) => l.id === payload.new.id ? { ...l, ...payload.new } : l));
         }).subscribe();
         return () => { supabase.removeChannel(msgChannel); supabase.removeChannel(leadChannel); };
     }, [selectedLeadId, claim, isReadOnly]);
@@ -859,7 +858,7 @@ const GodModeView = ({ claim, onBack }: { claim: any, onBack: () => void }) => {
     const updateLeadStatus = async (leadId: string, newStatus: LeadStatus) => {
         if (isReadOnly) return;
         const { error } = await supabase.from('leads').update({ site_status: newStatus }).eq('id', leadId);
-        if(!error) setLeads(prev => prev.map(l => l.id === leadId ? { ...l, site_status: newStatus } : l));
+        if(!error) setLeads((prev: any[]) => prev.map((l: any) => l.id === leadId ? { ...l, site_status: newStatus } : l));
     };
 
     // --- FIX: ANSWER NORMALIZATION ---
@@ -879,14 +878,14 @@ const GodModeView = ({ claim, onBack }: { claim: any, onBack: () => void }) => {
             return null; 
         });
 
-        setLeads(prev => prev.map(l => l.id === selectedLead.id ? { ...l, answers: newAnswers } : l));
+        setLeads((prev: any[]) => prev.map((l: any) => l.id === selectedLead.id ? { ...l, answers: newAnswers } : l));
         setEditingAnswerIndex(null);
 
         const { error } = await supabase.from('leads').update({ answers: newAnswers }).eq('id', selectedLead.id);
         
         if (error) {
             alert(`Save Failed: ${error.message}. Check Admin RLS Policies.`);
-            setLeads(prev => prev.map(l => l.id === selectedLead.id ? { ...l, answers: selectedLead.answers } : l));
+            setLeads((prev: any[]) => prev.map((l: any) => l.id === selectedLead.id ? { ...l, answers: selectedLead.answers } : l));
         } else {
             await supabase.from('audit_logs').insert({ lead_id: selectedLead.id, action: "Data Correction (Admin)", detail: `Updated Q${index + 1} to "${newAnswer}"`, performed_by: 'Admin' });
         }
@@ -895,13 +894,13 @@ const GodModeView = ({ claim, onBack }: { claim: any, onBack: () => void }) => {
     const saveNote = async () => {
         if (!selectedLeadId || isReadOnly) return;
         await supabase.from('leads').update({ researcher_notes: noteBuffer }).eq('id', selectedLeadId);
-        setLeads(prev => prev.map(l => l.id === selectedLeadId ? { ...l, researcher_notes: noteBuffer } : l));
+        setLeads((prev: any[]) => prev.map((l: any) => l.id === selectedLeadId ? { ...l, researcher_notes: noteBuffer } : l));
     };
 
     const handleSendMessage = async () => {
         if (!messageInput.trim() || !selectedLeadId || isReadOnly) return;
         const newMessage = { id: Date.now(), lead_id: selectedLeadId, content: messageInput, sender_role: 'researcher', created_at: new Date().toISOString(), is_read: false };
-        setMessages(prev => [...prev, newMessage]); 
+        setMessages((prev: any[]) => [...prev, newMessage]); 
         setMessageInput("");
         const { error } = await supabase.from('messages').insert({ lead_id: selectedLeadId, content: messageInput, sender_role: 'researcher' });
         if (error) alert("Message failed to send: " + error.message);
@@ -928,7 +927,7 @@ const GodModeView = ({ claim, onBack }: { claim: any, onBack: () => void }) => {
         const { error } = await supabase.from('leads').delete().eq('id', selectedLeadId);
         if (error) { alert("Error deleting: " + error.message); } 
         else {
-            setLeads(prev => prev.filter(l => l.id !== selectedLeadId));
+            setLeads((prev: any[]) => prev.filter((l: any) => l.id !== selectedLeadId));
             setSelectedLeadId(null);
         }
     };
@@ -944,7 +943,7 @@ const GodModeView = ({ claim, onBack }: { claim: any, onBack: () => void }) => {
     const removePhoto = (url: string) => setPhotos(photos.filter((p: string) => p !== url));
 
     // --- SHARED TIER CALCULATION USAGE ---
-    const selectedLead = leads.find(l => l.id === selectedLeadId);
+    const selectedLead = leads.find((l: any) => l.id === selectedLeadId);
     
     // Match Score with Unsure logic
     const calculateMatchScore = () => {
@@ -963,7 +962,7 @@ const GodModeView = ({ claim, onBack }: { claim: any, onBack: () => void }) => {
     const formatTime = (dateStr: string) => { return new Date(dateStr).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }); };
 
     const StatusColumn = ({ status, label, icon: Icon, colorClass }: any) => {
-        const columnLeads = leads.filter(l => {
+        const columnLeads = leads.filter((l: any) => {
             const matchesStatus = status === 'Not Eligible' ? (l.site_status === 'Not Eligible' || l.site_status === 'Withdrawn') : (l.site_status || 'New') === status;
             const matchesSearch = l.name.toLowerCase().includes(searchTerm.toLowerCase());
             const tier = calculateTier(l, questions); // <--- FIXED: USES GLOBAL FUNCTION
@@ -977,7 +976,7 @@ const GodModeView = ({ claim, onBack }: { claim: any, onBack: () => void }) => {
                     <span className="text-[10px] font-bold bg-white px-2 py-0.5 rounded text-slate-500 shadow-sm">{columnLeads.length}</span>
                 </div>
                 <div className="flex-1 overflow-y-auto p-3 space-y-3">
-                    {columnLeads.map(lead => {
+                    {columnLeads.map((lead: any) => {
                         const tier = calculateTier(lead, questions); // <--- FIXED
                         const TierIcon = tier?.icon || HelpCircle;
                         return (
@@ -1113,7 +1112,7 @@ const GodModeView = ({ claim, onBack }: { claim: any, onBack: () => void }) => {
                                         <div className="flex flex-col h-[600px] bg-white border border-slate-200 rounded-xl shadow-sm overflow-hidden">
                                             <div ref={chatBottomRef} className="flex-1 p-4 overflow-y-auto bg-slate-50 space-y-4">
                                                 {messages.length === 0 && <div className="text-center py-10 text-slate-400 text-xs">No messages yet.</div>}
-                                                {messages.map((msg, i) => (
+                                                {messages.map((msg: any, i: number) => (
                                                     <div key={i} className={`flex ${msg.sender_role === 'researcher' ? 'justify-end' : 'justify-start'}`}><div className={`max-w-[80%] p-3 rounded-xl text-sm ${msg.sender_role === 'researcher' ? 'bg-indigo-600 text-white rounded-br-none' : 'bg-white border border-slate-200 rounded-bl-none text-slate-700'}`}><div>{msg.content}</div><div className="text-[10px] text-indigo-200 mt-1 flex items-center justify-end gap-1">{formatTime(msg.created_at)} {msg.sender_role === 'researcher' && (<span>{msg.is_read ? <CheckCheck className="h-3 w-3" /> : <Check className="h-3 w-3" />}</span>)}</div></div></div>
                                                 ))}
                                             </div>
@@ -1158,12 +1157,12 @@ const GodModeView = ({ claim, onBack }: { claim: any, onBack: () => void }) => {
                                 {activeTab === 'profile' ? (
                                     <>
                                         <div className="bg-white p-6 rounded-xl border border-slate-200 shadow-sm mb-6"><h3 className="font-bold text-slate-900 mb-4">Study Overview</h3><textarea className="w-full h-64 p-4 bg-slate-50 border border-slate-200 rounded-xl outline-none text-slate-900 text-sm leading-relaxed focus:ring-2 focus:ring-indigo-500" value={customSummary} onChange={(e) => setCustomSummary(e.target.value)} placeholder="Enter patient-friendly description..." /></div>
-                                        <div className="bg-white p-6 rounded-xl border border-slate-200 shadow-sm"><div className="flex justify-between items-center mb-6"><h3 className="font-bold text-slate-900">Screener Questions</h3><button onClick={addQuestion} className="text-xs font-bold text-indigo-600 bg-indigo-50 px-3 py-2 rounded-lg hover:bg-indigo-100">+ Add Question</button></div><div className="space-y-4">{questions.map((q, idx) => (<div key={idx} className="flex gap-4 items-center group"><div className="flex-1"><input type="text" value={q.question} onChange={(e) => updateQuestionText(idx, e.target.value)} className="w-full p-3 bg-slate-50 border border-slate-200 rounded-lg text-sm focus:ring-2 focus:ring-indigo-500 outline-none" placeholder="Question..." /></div><button onClick={() => toggleAnswer(idx)} className={`w-24 py-3 rounded-lg text-xs font-bold border ${q.correct_answer === 'Yes' ? 'bg-emerald-50 text-emerald-700 border-emerald-200' : 'bg-red-50 text-red-700 border-red-200'}`}>{q.correct_answer}</button><button onClick={() => removeQuestion(idx)} className="p-3 text-slate-400 hover:text-red-500 hover:bg-red-50 rounded-lg transition-colors"><Trash2 className="h-4 w-4" /></button></div>))}</div></div>
+                                        <div className="bg-white p-6 rounded-xl border border-slate-200 shadow-sm"><div className="flex justify-between items-center mb-6"><h3 className="font-bold text-slate-900">Screener Questions</h3><button onClick={addQuestion} className="text-xs font-bold text-indigo-600 bg-indigo-50 px-3 py-2 rounded-lg hover:bg-indigo-100">+ Add Question</button></div><div className="space-y-4">{questions.map((q: any, idx: number) => (<div key={idx} className="flex gap-4 items-center group"><div className="flex-1"><input type="text" value={q.question} onChange={(e) => updateQuestionText(idx, e.target.value)} className="w-full p-3 bg-slate-50 border border-slate-200 rounded-lg text-sm focus:ring-2 focus:ring-indigo-500 outline-none" placeholder="Question..." /></div><button onClick={() => toggleAnswer(idx)} className={`w-24 py-3 rounded-lg text-xs font-bold border ${q.correct_answer === 'Yes' ? 'bg-emerald-50 text-emerald-700 border-emerald-200' : 'bg-red-50 text-red-700 border-red-200'}`}>{q.correct_answer}</button><button onClick={() => removeQuestion(idx)} className="p-3 text-slate-400 hover:text-red-500 hover:bg-red-50 rounded-lg transition-colors"><Trash2 className="h-4 w-4" /></button></div>))}</div></div>
                                     </>
                                 ) : (
                                     <>
                                         <div className="bg-white p-6 rounded-xl border border-slate-200 shadow-sm"><div className="flex items-start gap-4 mb-6"><div className="p-2 bg-indigo-50 text-indigo-600 rounded-lg"><Video className="h-5 w-5" /></div><div><h3 className="font-bold text-slate-900">Intro Video</h3></div></div><input type="text" value={videoUrl} onChange={(e) => setVideoUrl(e.target.value)} placeholder="Paste link..." className="w-full p-3 bg-slate-50 border border-slate-200 rounded-xl outline-none focus:ring-2 focus:ring-indigo-500 text-sm" /></div>
-                                        <div className="bg-white p-6 rounded-xl border border-slate-200 shadow-sm"><div className="flex justify-between items-center mb-6"><div className="flex items-center gap-3"><div className="p-2 bg-indigo-50 text-indigo-600 rounded-lg"><MessageSquare className="h-5 w-5" /></div><div><h3 className="font-bold text-slate-900">Q&A</h3></div></div><button onClick={addFaq} className="text-xs font-bold text-indigo-600 bg-indigo-50 px-3 py-2 rounded-lg hover:bg-indigo-100">+ Add Question</button></div><div className="space-y-4">{faqs.map((f, idx) => (<div key={idx} className="p-4 bg-slate-50 rounded-xl border border-slate-100 relative group"><button onClick={() => removeFaq(idx)} className="absolute top-4 right-4 text-slate-300 hover:text-red-500 transition-colors"><X className="h-4 w-4" /></button><input type="text" value={f.question} onChange={(e) => updateFaq(idx, 'question', e.target.value)} className="w-full bg-transparent border-b border-slate-200 pb-2 mb-2 text-sm font-bold text-slate-900 outline-none" /><textarea value={f.answer} onChange={(e) => updateFaq(idx, 'answer', e.target.value)} className="w-full bg-transparent text-sm text-slate-600 outline-none resize-none" rows={2} /></div>))}</div></div>
+                                        <div className="bg-white p-6 rounded-xl border border-slate-200 shadow-sm"><div className="flex justify-between items-center mb-6"><div className="flex items-center gap-3"><div className="p-2 bg-indigo-50 text-indigo-600 rounded-lg"><MessageSquare className="h-5 w-5" /></div><div><h3 className="font-bold text-slate-900">Q&A</h3></div></div><button onClick={addFaq} className="text-xs font-bold text-indigo-600 bg-indigo-50 px-3 py-2 rounded-lg hover:bg-indigo-100">+ Add Question</button></div><div className="space-y-4">{faqs.map((f: any, idx: number) => (<div key={idx} className="p-4 bg-slate-50 rounded-xl border border-slate-100 relative group"><button onClick={() => removeFaq(idx)} className="absolute top-4 right-4 text-slate-300 hover:text-red-500 transition-colors"><X className="h-4 w-4" /></button><input type="text" value={f.question} onChange={(e) => updateFaq(idx, 'question', e.target.value)} className="w-full bg-transparent border-b border-slate-200 pb-2 mb-2 text-sm font-bold text-slate-900 outline-none" /><textarea value={f.answer} onChange={(e) => updateFaq(idx, 'answer', e.target.value)} className="w-full bg-transparent text-sm text-slate-600 outline-none resize-none" rows={2} /></div>))}</div></div>
                                     </>
                                 )}
                                 <div className="fixed bottom-0 left-0 right-0 bg-white/90 backdrop-blur-md border-t border-slate-200 p-4 z-40 flex justify-end px-10 shadow-lg"><button onClick={saveSettings} disabled={isReadOnly || isSaving} className="flex items-center gap-2 bg-slate-900 text-white px-8 py-3 rounded-xl font-bold shadow-lg disabled:opacity-50">{isSaving ? <Loader2 className="h-4 w-4 animate-spin" /> : <Save className="h-4 w-4" />} Save Changes</button></div>
