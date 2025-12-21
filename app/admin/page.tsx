@@ -873,7 +873,7 @@ const GodModeView = ({ claim, onBack }: { claim: any, onBack: () => void }) => {
     const updateLeadAnswer = async (index: number, newAnswer: string) => {
         if (!selectedLead || isReadOnly) return;
         
-        const newAnswers = questions.map((_, i) => {
+        const newAnswers = questions.map((_: string, i: number) => {
             if (i === index) return newAnswer;
             if (selectedLead.answers && selectedLead.answers[i] !== undefined) return selectedLead.answers[i];
             return null; 
