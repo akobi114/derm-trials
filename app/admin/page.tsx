@@ -941,7 +941,7 @@ const GodModeView = ({ claim, onBack }: { claim: any, onBack: () => void }) => {
     const addFaq = () => setFaqs([...faqs, { question: "", answer: "" }]);
     const removeFaq = (i: number) => { const n = [...faqs]; n.splice(i, 1); setFaqs(n); };
     const updateFaq = (i: number, f: string, t: string) => { const n = [...faqs]; (n[i] as any)[f] = t; setFaqs(n); };
-    const removePhoto = (url: string) => setPhotos(photos.filter(p => p !== url));
+    const removePhoto = (url: string) => setPhotos(photos.filter((p: string) => p !== url));
 
     // --- SHARED TIER CALCULATION USAGE ---
     const selectedLead = leads.find(l => l.id === selectedLeadId);
