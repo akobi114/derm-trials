@@ -1,7 +1,9 @@
-import Link from 'next/link';
-import { ArrowLeft, ShieldCheck } from 'lucide-react';
+"use client";
 
-export default function TermsPage() {
+import Link from 'next/link';
+import { ArrowLeft, Lock } from 'lucide-react';
+
+export default function PrivacyPage() {
   return (
     <div className="min-h-screen bg-slate-50 py-12 px-6 font-sans">
       <div className="max-w-3xl mx-auto bg-white p-8 md:p-12 rounded-2xl shadow-sm border border-slate-200">
@@ -11,79 +13,53 @@ export default function TermsPage() {
         </Link>
 
         <header className="mb-10 border-b border-slate-100 pb-6">
-          <div className="w-12 h-12 bg-indigo-50 text-indigo-600 rounded-xl flex items-center justify-center mb-4">
-            <ShieldCheck className="h-6 w-6" />
+          <div className="w-12 h-12 bg-emerald-50 text-emerald-600 rounded-xl flex items-center justify-center mb-4">
+            <Lock className="h-6 w-6" />
           </div>
-          <h1 className="text-3xl font-extrabold text-slate-900">Terms of Service</h1>
+          <h1 className="text-3xl font-extrabold text-slate-900">Privacy Policy</h1>
           <p className="text-slate-500 mt-2">Last Updated: December 2025</p>
         </header>
 
         <div className="prose prose-slate max-w-none text-slate-700 space-y-8 leading-relaxed">
           <section>
-            <h3 className="text-xl font-bold text-slate-900 mb-3">1. Nature of Our Services</h3>
             <p>
-              DermTrials ("Company", "we", "us") is a digital marketing and patient recruitment platform. 
-              <strong className="text-slate-900 block mt-2">We are not a healthcare provider, medical office, or research site.</strong>
-            </p>
-            <ul className="list-disc pl-5 mt-3 space-y-2">
-              <li><strong>No Medical Advice:</strong> The content, screening questionnaires, and communications provided by DermTrials are for informational and recruitment purposes only. Nothing on this platform constitutes medical advice, diagnosis, or treatment. Always seek the advice of your physician or other qualified health provider with any questions you may have regarding a medical condition.</li>
-              <li><strong>Role of DermTrials:</strong> We connect interested candidates with third-party clinical researchers. We do not conduct the trials, control the medical protocols, or guarantee acceptance into any study.</li>
-            </ul>
-          </section>
-
-          <section>
-            <h3 className="text-xl font-bold text-slate-900 mb-3">2. TCPA Consent & Communications</h3>
-            <p>
-              By providing your phone number and clicking "Submit" or "Check Eligibility," you provide your <strong>express written consent</strong> to receive calls, SMS/MMS text messages, and emails from DermTrials and our partner research sites.
-            </p>
-            <ul className="list-disc pl-5 mt-3 space-y-2">
-              <li><strong>Automated Technology:</strong> You acknowledge that these communications may be sent using an automatic telephone dialing system (autodialer) or prerecorded voice.</li>
-              <li><strong>Content:</strong> Messages may include updates on your application status, appointment reminders, and alerts about future clinical trial opportunities.</li>
-              <li><strong>Opt-Out:</strong> Consent is not a condition of purchase. You may opt-out of text messages at any time by replying "STOP." Message and data rates may apply.</li>
-            </ul>
-          </section>
-
-          <section>
-            <h3 className="text-xl font-bold text-slate-900 mb-3">3. Eligibility & Account Security</h3>
-            <ul className="list-disc pl-5 mt-3 space-y-2">
-              <li>You must be at least 18 years old to use this platform.</li>
-              <li>You agree to provide accurate, current, and complete information during the screening process. Providing false health information to qualify for a study is a violation of these Terms.</li>
-              <li>You are responsible for maintaining the confidentiality of your dashboard password.</li>
-            </ul>
-          </section>
-
-          <section>
-            <h3 className="text-xl font-bold text-slate-900 mb-3">4. User Data & Privacy</h3>
-            <p>
-              Our use of your personal information is governed by our <Link href="/privacy" className="text-indigo-600 font-bold hover:underline">Privacy Policy</Link>. By using DermTrials, you consent to the collection and sharing of your information with clinical research sites as described in that policy.
+              DermTrials ("we", "us") is committed to protecting your privacy. This Privacy Policy explains how we collect, use, and share your information when you use our platform as either a patient or a <strong>Principal Investigator</strong>.
             </p>
           </section>
 
           <section>
-            <h3 className="text-xl font-bold text-slate-900 mb-3">5. Limitation of Liability</h3>
-            <p>To the fullest extent permitted by law, DermTrials shall not be liable for:</p>
+            <h3 className="text-xl font-bold text-slate-900 mb-3">1. Information We Collect</h3>
+            <p>We collect information you provide directly to us, including:</p>
             <ul className="list-disc pl-5 mt-3 space-y-2">
-              <li>Any injury, health complication, or damages arising from your participation in a clinical trial found through our service.</li>
-              <li>The conduct, negligence, or medical decisions of any third-party researcher or clinical site.</li>
-              <li>Any technical errors or data loss on the platform.</li>
+              <li><strong>Identity & Contact Data:</strong> Name, email, phone number, and zip code.</li>
+              {/* Added PI specific data collection */}
+              <li><strong>Professional Credentials (PIs Only):</strong> National Provider Identifier (NPI) number, institutional affiliation, professional title, and verification documents (e.g., ID badges, business cards, or official letterhead).</li>
+              <li><strong>Health Screening Data (Patients Only):</strong> Answers to eligibility questionnaires regarding specific medical conditions and medications.</li>
+              <li><strong>Technical Data:</strong> IP address, browser type, and device information.</li>
             </ul>
           </section>
 
           <section>
-            <h3 className="text-xl font-bold text-slate-900 mb-3">6. Data Sources & Attribution</h3>
-            <p>
-              This application uses publicly available data from the U.S. National Library of Medicine (NLM) at <a href="https://clinicaltrials.gov" target="_blank" rel="noreferrer" className="text-indigo-600 hover:underline">ClinicalTrials.gov</a>.
-            </p>
+            <h3 className="text-xl font-bold text-slate-900 mb-3">2. How We Use Your Information</h3>
+            <p>We use your data to:</p>
             <ul className="list-disc pl-5 mt-3 space-y-2">
-              <li><strong>Source Attribution:</strong> Study titles, descriptions, and eligibility criteria are sourced via the ClinicalTrials.gov API.</li>
-              <li><strong>No Endorsement:</strong> DermTrials is not affiliated with, endorsed by, or sponsored by the NLM, the National Institutes of Health (NIH), or the U.S. Department of Health and Human Services (HHS).</li>
-              <li><strong>Data Accuracy:</strong> While we strive to keep information updated, clinical trial details change frequently. We do not guarantee that the study information displayed is current or error-free. Always verify details with the specific clinical site.</li>
+              {/* Added PI specific usage */}
+              <li><strong>Verify Investigator Standing:</strong> We use professional credentials and NPI data to manually verify the identity and professional status of researchers before granting dashboard access.</li>
+              <li>Determine patient eligibility for clinical trials and connect them with verified researchers.</li>
+              <li>Communicate application or account verification status via email, text, or phone.</li>
             </ul>
           </section>
 
           <section>
-            <h3 className="text-xl font-bold text-slate-900 mb-3">7. Contact Us</h3>
-            <p>For questions about these Terms, please contact us at support@dermtrials.com.</p>
+            <h3 className="text-xl font-bold text-slate-900 mb-3">3. Sharing Your Information</h3>
+            <p className="mb-2"><strong>Investigator Data:</strong> Professional information provided by investigators (Name, NPI, Site Name) may be displayed on public-facing trial pages to facilitate patient recruitment.</p>
+            <p className="mb-2"><strong>Patient Data:</strong> When a patient applies for a trial, their profile is shared exclusively with the <strong>Verified Principal Investigator</strong> and their authorized site staff.</p>
+            <p className="mt-4 font-bold text-slate-900">We do not sell professional credentials or personal health data to third-party data brokers for non-research purposes.</p>
+          </section>
+
+          <section>
+            <h3 className="text-xl font-bold text-slate-900 mb-3">4. Access & Deletion</h3>
+            <p>You may request a copy of your data or request deletion of your account (including uploaded professional verification documents) by contacting us at support@dermtrials.com.</p>
           </section>
         </div>
       </div>

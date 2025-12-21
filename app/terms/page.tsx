@@ -83,45 +83,58 @@ export default function TermsPage() {
               </ul>
             </section>
 
-            {/* SECTION 2: COMMUNICATIONS */}
+            {/* SECTION 2: INVESTIGATOR VERIFICATION (NEW GOAL-SPECIFIC SECTION) */}
+            <section className="bg-slate-50 p-6 rounded-2xl border border-slate-200">
+              <h3 className="text-lg font-black text-slate-900 uppercase tracking-wide mb-4 flex items-center gap-2">
+                <ShieldCheck className="h-5 w-5 text-indigo-600" /> 2. Investigator Accounts & Verification
+              </h3>
+              <p>Access to the Researcher Dashboard is strictly limited to <strong>Verified Principal Investigators (PIs)</strong> and their authorized staff.</p>
+              <ul className="list-disc pl-5 mt-3 space-y-2 text-sm">
+                <li><strong>Credential Requirements:</strong> All PIs must provide a valid 10-digit National Provider Identifier (NPI) number and verifiable institutional identification.</li>
+                <li><strong>Manual Review:</strong> To maintain clinical integrity, all new researcher accounts undergo a manual verification process. Accounts are typically reviewed and activated within 24 hours.</li>
+                <li><strong>Ownership Rights:</strong> Claiming ownership of a protocol requires professional proof of site participation. We reserve the right to revoke access if ownership cannot be verified.</li>
+              </ul>
+            </section>
+
+            {/* SECTION 3: COMMUNICATIONS */}
             <section>
-              <h3 className="text-lg font-black text-slate-900 uppercase tracking-wide mb-4">2. TCPA Consent & Communications</h3>
-              <p>By providing your phone number and clicking "Submit" or "Check Eligibility", you provide your <strong>express written consent</strong> to receive calls, SMS/MMS text messages, and emails from DermTrials and our partner research sites.</p>
+              <h3 className="text-lg font-black text-slate-900 uppercase tracking-wide mb-4">3. TCPA Consent & Communications</h3>
+              <p>By providing your phone number and clicking "Complete Registration", "Submit", or "Check Eligibility", you provide your <strong>express written consent</strong> to receive calls, SMS/MMS text messages, and emails from DermTrials and our partner research sites.</p>
               <ul className="list-disc pl-5 mt-3 space-y-2">
                 <li><strong>Automated Technology:</strong> You acknowledge that communications may be sent using an automatic telephone dialing system (autodialer) or prerecorded voice.</li>
                 <li><strong>Opt-Out:</strong> Consent is not a condition of purchase. You may opt-out of text messages at any time by replying "STOP."</li>
               </ul>
             </section>
 
-            {/* SECTION 3: PROHIBITED USE */}
+            {/* SECTION 4: PROHIBITED USE */}
             <section>
               <h3 className="text-lg font-black text-slate-900 uppercase tracking-wide mb-4 flex items-center gap-2">
-                <FileWarning className="h-5 w-5 text-indigo-600" /> 3. Prohibited Conduct
+                <FileWarning className="h-5 w-5 text-indigo-600" /> 4. Prohibited Conduct
               </h3>
               <p>You agree not to use the Site for any unlawful purpose. You agree not to:</p>
               <ul className="list-disc pl-5 mt-3 space-y-2">
+                <li><strong>False Information:</strong> Knowingly provide false health information or false professional credentials (including fraudulent NPI data) to access the Site.</li>
+                <li><strong>Data Privacy:</strong> Investigators agree to handle all patient leads in compliance with applicable health data laws and only for authorized recruitment purposes.</li>
                 <li><strong>Data Scraping:</strong> Use any robot, spider, scraper, or automated means to access the Site without our express written permission.</li>
-                <li><strong>Reverse Engineering:</strong> Attempt to decompile or disassemble any aspect of the Site to access source code.</li>
-                <li><strong>False Information:</strong> Knowingly provide false health information to qualify for a clinical trial.</li>
               </ul>
             </section>
 
-            {/* SECTION 4: INTELLECTUAL PROPERTY */}
+            {/* SECTION 5: INTELLECTUAL PROPERTY */}
             <section>
-              <h3 className="text-lg font-black text-slate-900 uppercase tracking-wide mb-4">4. Intellectual Property</h3>
+              <h3 className="text-lg font-black text-slate-900 uppercase tracking-wide mb-4">5. Intellectual Property</h3>
               <p>The Site and its original content, features, and functionality are owned by DermTrials and are protected by United States and international copyright, trademark, patent, trade secret, and other intellectual property laws.</p>
             </section>
 
-            {/* SECTION 5: DISCLAIMERS & LIABILITY */}
+            {/* SECTION 6: DISCLAIMERS & LIABILITY */}
             <section>
-              <h3 className="text-lg font-black text-slate-900 uppercase tracking-wide mb-4">5. Disclaimers & Limitation of Liability</h3>
+              <h3 className="text-lg font-black text-slate-900 uppercase tracking-wide mb-4">6. Disclaimers & Limitation of Liability</h3>
               <p className="uppercase text-xs font-bold text-slate-500 mb-2">Limitation of Liability</p>
               <p>TO THE FULLEST EXTENT PERMITTED BY LAW, DERMTRIALS SHALL NOT BE LIABLE FOR ANY INDIRECT, INCIDENTAL, SPECIAL, CONSEQUENTIAL, OR PUNITIVE DAMAGES ARISING OUT OF OR IN CONNECTION WITH YOUR USE OF THE SITE.</p>
             </section>
 
-            {/* SECTION 6: DATA SOURCES */}
+            {/* SECTION 7: DATA SOURCES */}
             <section className="bg-slate-50 p-6 rounded-2xl border border-slate-200">
-              <h3 className="text-lg font-black text-slate-900 uppercase tracking-wide mb-4">6. Data Sources & Attribution</h3>
+              <h3 className="text-lg font-black text-slate-900 uppercase tracking-wide mb-4">7. Data Sources & Attribution</h3>
               <p className="text-sm">This application uses publicly available data from the U.S. National Library of Medicine (NLM) at <a href="https://clinicaltrials.gov" target="_blank" className="text-indigo-600 font-bold hover:underline">ClinicalTrials.gov</a>.</p>
               <ul className="list-disc pl-5 mt-3 space-y-2 text-sm">
                 <li><strong>Source Attribution:</strong> Study titles and criteria are sourced via the ClinicalTrials.gov API.</li>
@@ -129,31 +142,31 @@ export default function TermsPage() {
               </ul>
             </section>
 
-            {/* SECTION 7: GOVERNING LAW (UPDATED TO GEORGIA) */}
+            {/* SECTION 8: GOVERNING LAW */}
             <section>
-              <h3 className="text-lg font-black text-slate-900 uppercase tracking-wide mb-4">7. Governing Law</h3>
+              <h3 className="text-lg font-black text-slate-900 uppercase tracking-wide mb-4">8. Governing Law</h3>
               <p>These Terms shall be governed and construed in accordance with the laws of the State of Georgia, without regard to its conflict of law provisions.</p>
             </section>
 
-            {/* SECTION 8: TERMINATION */}
+            {/* SECTION 9: TERMINATION */}
             <section>
               <h3 className="text-lg font-black text-slate-900 uppercase tracking-wide mb-4 flex items-center gap-2">
-                <Ban className="h-5 w-5 text-indigo-600" /> 8. Termination
+                <Ban className="h-5 w-5 text-indigo-600" /> 9. Termination
               </h3>
               <p>
                 We may terminate or suspend your account and bar access to the Service immediately, without prior notice or liability, under our sole discretion, for any reason whatsoever and without limitation, including but not limited to a breach of the Terms.
               </p>
             </section>
 
-            {/* SECTION 9: DISPUTE RESOLUTION (UPDATED TO ATLANTA, GA) */}
+            {/* SECTION 10: DISPUTE RESOLUTION */}
             <section>
               <h3 className="text-lg font-black text-slate-900 uppercase tracking-wide mb-4 flex items-center gap-2">
-                <Gavel className="h-5 w-5 text-indigo-600" /> 9. Dispute Resolution
+                <Gavel className="h-5 w-5 text-indigo-600" /> 10. Dispute Resolution
               </h3>
               <div className="bg-slate-50 p-5 rounded-xl border border-slate-200 text-sm">
                 <p className="mb-3 font-bold text-slate-900">BINDING ARBITRATION AND CLASS ACTION WAIVER</p>
                 <p>
-                  Any dispute, claim, or controversy arising out of or relating to these Terms or the breach, termination, enforcement, interpretation, or validity thereof, including the determination of the scope or applicability of this agreement to arbitrate, shall be determined by arbitration in Atlanta, Georgia before one arbitrator. Judgment on the Award may be entered in any court having jurisdiction. This clause shall not preclude parties from seeking provisional remedies in aid of arbitration from a court of appropriate jurisdiction.
+                  Any dispute, claim, or controversy arising out of or relating to these Terms shall be determined by arbitration in Atlanta, Georgia before one arbitrator. Judgment on the Award may be entered in any court having jurisdiction.
                 </p>
                 <p className="mt-3">
                   <strong>YOU AND DERMTRIALS AGREE THAT EACH MAY BRING CLAIMS AGAINST THE OTHER ONLY IN YOUR OR ITS INDIVIDUAL CAPACITY AND NOT AS A PLAINTIFF OR CLASS MEMBER IN ANY PURPORTED CLASS OR REPRESENTATIVE PROCEEDING.</strong>
@@ -161,10 +174,10 @@ export default function TermsPage() {
               </div>
             </section>
 
-            {/* SECTION 10: CONTACT */}
+            {/* SECTION 11: CONTACT */}
             <section>
-              <h3 className="text-lg font-black text-slate-900 uppercase tracking-wide mb-4">10. Contact Us</h3>
-              <p className="text-slate-600 mb-6">If you have any questions about these Terms, please contact our compliance team:</p>
+              <h3 className="text-lg font-black text-slate-900 uppercase tracking-wide mb-4">11. Contact Us</h3>
+              <p className="text-slate-600 mb-6">If you have any questions about these Terms or the Investigator verification process, please contact our compliance team:</p>
               <button onClick={() => setIsModalOpen(true)} className="inline-flex items-center gap-2 bg-indigo-600 text-white px-6 py-3 rounded-xl font-bold text-sm hover:bg-indigo-700 transition-all shadow-lg active:scale-95">
                 <Mail className="h-4 w-4" /> Contact Support
               </button>

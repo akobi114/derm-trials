@@ -1,18 +1,25 @@
 import { NextResponse } from 'next/server';
-import { supabase } from '@/lib/supabase';
+import { supabaseServer as supabase } from '@/lib/supabaseServer';
 import { GoogleGenerativeAI } from '@google/generative-ai';
 
 // RATE LIMIT SETTINGS: 
 // Google Free Tier allows ~15 requests/min. 
 // We wait 6 seconds between items to be safe.
-const DELAY_MS = 6000;
-const BATCH_SIZE = 3;
+const DELAY_MS = 1000;
+const BATCH_SIZE = 15;
 
 const wait = (ms: number) => new Promise(resolve => setTimeout(resolve, ms));
 
 export async function GET() {
   try {
     console.log("--- 🤖 Gemini Agent (Safe Mode) Starting ---");
+
+    // --- DEEP DEBUG LOGGING START ---
+    console.log("DEBUG: Checking Environment Variables...");
+    console.log("URL Check:", process.env.NEXT_PUBLIC_SUPABASE_URL ? "✅ Loaded" : "❌ MISSING");
+    console.log("Service Key Check:", process.env.SUPABASE_SERVICE_ROLE_KEY ? "✅ Loaded" : "❌ MISSING");
+    console.log("Gemini Key Check:", process.env.GEMINI_API_KEY ? "✅ Loaded" : "❌ MISSING");
+    // --- DEEP DEBUG LOGGING END ---
 
     const apiKey = process.env.GEMINI_API_KEY;
     if (!apiKey) return NextResponse.json({ error: "Missing GEMINI_API_KEY" }, { status: 500 });
@@ -35,7 +42,10 @@ export async function GET() {
       .is('screener_questions', null)  // Condition 2 (Protects your manual edits)
       .limit(BATCH_SIZE); 
 
-    if (error) throw error;
+    if (error) {
+      console.error("🔥 DATABASE FETCH ERROR:", error.message);
+      throw error;
+    }
     
     if (!trials || trials.length === 0) {
       return NextResponse.json({ 
@@ -100,6 +110,12 @@ export async function GET() {
         3. **Bucket Logic:** Group similar exclusions.
         4. **Correct Answer:** Define the answer required to be ELIGIBLE ("Yes" or "No").
 
+        --- TASK 3: SEARCH OVERVIEW SNIPPET ---
+        Create a high-impact, 2-sentence summary for the search results card.
+        1. Sentence 1 (What): Clearly state what the trial is (testing a pill, injection, or cream) and who it is for.
+        2. Sentence 2 (Why): Explain why someone should consider it (access to a new treatment, relief from failed standard care, or long-term monitoring).
+        3. Rules: No emojis, no bolding, and strictly stay under 250 characters.
+
         --- JSON OUTPUT FORMAT ---
         Output a single JSON object:
         {
@@ -107,7 +123,8 @@ export async function GET() {
           "questions": [
             { "question": "Are you at least 18 years old?", "correct_answer": "Yes" },
             ...
-          ]
+          ],
+          "snippet": "The 2-sentence search snippet..."
         }
       `;
 
@@ -116,16 +133,23 @@ export async function GET() {
         const text = result.response.text();
         const aiData = JSON.parse(text);
 
-        await supabase
+        // --- DATABASE ERROR CHECK ADDED HERE ---
+        const { error: updateError } = await supabase
           .from('trials')
           .update({ 
             simple_summary: aiData.summary,
             screener_questions: aiData.questions,
+            ai_snippet: aiData.snippet,
             last_updated: new Date().toISOString()
           })
           .eq('nct_id', trial.nct_id);
 
-        results.push({ id: trial.nct_id, status: "Success" });
+        if (updateError) {
+          console.error(`❌ DB Update Failed for ${trial.nct_id}:`, updateError.message);
+          results.push({ id: trial.nct_id, status: "Failed", error: updateError.message });
+        } else {
+          results.push({ id: trial.nct_id, status: "Success" });
+        }
 
       } catch (err: any) {
         console.error(err);
@@ -140,6 +164,8 @@ export async function GET() {
     return NextResponse.json({ success: true, processed: results.length, details: results });
 
   } catch (error: any) {
+    // Force the full error to print to the terminal console
+    console.error("🔥 CRITICAL AGENT ERROR:", error); 
     return NextResponse.json({ error: error.message }, { status: 500 });
   }
 }

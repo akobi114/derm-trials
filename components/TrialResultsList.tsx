@@ -20,11 +20,11 @@ const STATE_MAP: Record<string, string> = {
   DC: "District of Columbia"
 };
 
-// --- TYPE DEFINITIONS BASED ON YOUR JSON ---
+// --- TYPE DEFINITIONS ---
 interface TrialLocation {
   zip: string;
   city: string;
-  state: string; // e.g. "Arizona"
+  state: string; 
   status: string;
   country: string;
   facility: string;
@@ -35,10 +35,8 @@ export interface Trial {
   nct_id: string;
   title: string;
   condition: string;
-  // We allow 'locations' (array) OR 'location' (string) to be safe, 
-  // but we prioritize the array structure you showed.
   locations?: TrialLocation[]; 
-  location?: string | any; // Fallback
+  location?: string | any; 
   status: string;
   tags: string[];
   simple_title?: string;
@@ -64,7 +62,7 @@ export default function TrialResultsList({ searchQuery, zipCode, distance = 100 
       setTrials([]);
 
       try {
-        // --- SCENARIO A: ZIP CODE SEARCH (GEOLOCATION) ---
+        // --- SCENARIO A: ZIP CODE SEARCH ---
         if (zipCode && zipCode.length >= 5) {
           const geoRes = await fetch(`https://api.zippopotam.us/us/${zipCode}`);
           
@@ -72,7 +70,7 @@ export default function TrialResultsList({ searchQuery, zipCode, distance = 100 
             const geoData = await geoRes.json();
             const lat = parseFloat(geoData.places[0].latitude);
             const lon = parseFloat(geoData.places[0].longitude);
-            const stateAbbr = geoData.places[0]['state abbreviation']; // "GA"
+            const stateAbbr = geoData.places[0]['state abbreviation']; 
             const cityName = geoData.places[0]['place name']; 
 
             setUserState(stateAbbr);
@@ -87,14 +85,12 @@ export default function TrialResultsList({ searchQuery, zipCode, distance = 100 
 
             if (!error && data) setTrials(data as any[]);
           } else {
-            // Invalid Zip
             setUserState(null);
             setSearchLabel("");
             await runTextSearch();
           }
 
         } else {
-          // --- SCENARIO B: TEXT ONLY SEARCH ---
           setUserState(null);
           setSearchLabel("");
           await runTextSearch();
@@ -167,45 +163,51 @@ export default function TrialResultsList({ searchQuery, zipCode, distance = 100 
           {trials.length > 0 ? (
             trials.map((trial) => {
               
-              // --- JSON ARRAY SMART MATCHER ---
-              // We create a "display version" of the trial to pass to the card.
+              // --- SMART "MULTI-LOCATION" AGGREGATOR ---
               const displayTrial = { ...trial };
               
-              // 1. Identify the array. It might be in 'locations' OR 'location' depending on your DB column name.
-              // We cast it to any[] to be safe since Supabase returns JSONB.
               const sitesArray = (Array.isArray(trial.locations) ? trial.locations : 
                                   Array.isArray(trial.location) ? trial.location : []) as TrialLocation[];
 
               if (userState && sitesArray.length > 0) {
-                  const stateAbbr = userState.toUpperCase(); // "GA"
-                  const stateFull = STATE_MAP[stateAbbr];    // "Georgia"
+                  const stateAbbr = userState.toUpperCase();
+                  const stateFull = STATE_MAP[stateAbbr];
 
-                  // 2. Find the site where the state matches either "GA" or "Georgia"
-                  const match = sitesArray.find(site => {
+                  // 1. Find ALL matching sites in this state
+                  const matches = sitesArray.filter(site => {
                       const s = (site.state || "").trim();
                       return s.toLowerCase() === stateFull?.toLowerCase() || 
                              s.toUpperCase() === stateAbbr;
                   });
 
-                  if (match) {
-                      // ✅ FOUND IT: Set the text to "City, State"
-                      displayTrial.location = `${match.city}, ${match.state}`;
+                  if (matches.length > 0) {
+                      // 2. Get unique city names to avoid "Phoenix, Phoenix"
+                      const uniqueCities = Array.from(new Set(matches.map(m => m.city.trim())));
+                      const count = uniqueCities.length;
+                      
+                      // 3. Format the display string based on how many locations exist
+                      if (count === 1) {
+                        displayTrial.location = `${uniqueCities[0]}, ${matches[0].state}`;
+                      } else if (count === 2) {
+                        displayTrial.location = `${uniqueCities[0]} & ${uniqueCities[1]}, ${matches[0].state}`;
+                      } else {
+                        // 3 or more: "Phoenix, Scottsdale (+2 others)"
+                        displayTrial.location = `${uniqueCities[0]}, ${uniqueCities[1]} (+${count - 2} others)`;
+                      }
+                      
                   } else {
-                      // ❌ NO MATCH: Hide location (Safety Mode)
                       displayTrial.location = ""; 
                   }
               } else if (sitesArray.length > 0) {
-                  // Fallback: If no zip search (user just typed "Acne"), show the first location
+                  // Fallback for non-zip searches
                   displayTrial.location = `${sitesArray[0].city}, ${sitesArray[0].state}`;
               } else {
-                  // Total fallback if data is weird/missing
                   displayTrial.location = ""; 
               }
 
               return <TrialCardWide key={trial.id} trial={displayTrial} />;
             })
           ) : (
-            // NO RESULTS FOUND
             <div className="p-12 text-center bg-white rounded-2xl border border-slate-200 border-dashed">
               <div className="w-16 h-16 bg-slate-50 rounded-full flex items-center justify-center mx-auto mb-4">
                  <MapPin className="h-8 w-8 text-slate-300" />
