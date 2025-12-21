@@ -31,7 +31,8 @@ export default function TrialCardWide({ trial, userLat, userLon }: any) {
       });
 
       // Sort by distance to find the absolute "winner" (the site closest to the user)
-      locationData.sort((a, b) => a.distance - b.distance);
+      // Fixed: Added explicit types for 'a' and 'b' parameters
+      locationData.sort((a: { distance: number }, b: { distance: number }) => a.distance - b.distance);
       const closest = locationData[0];
 
       if (closest.distance !== Infinity) {

@@ -1,7 +1,7 @@
 "use client";
 
-import React, { useEffect, useState, useCallback, useMemo } from 'react';
-import { useRouter, usePathname } from 'next/navigation'; 
+import React, { useEffect, useState, useCallback, useMemo, Suspense } from 'react';
+import { useRouter, usePathname, useSearchParams } from 'next/navigation'; // Added useSearchParams here to ensure it's captured
 import { supabase } from '@/lib/supabase';
 import { 
   Loader2, MapPin, Edit3, ChevronRight, BarChart3, AlertCircle, 
@@ -10,20 +10,21 @@ import {
 } from 'lucide-react';
 import Link from 'next/link';
 
-export default function ResearcherOverview() {
+// Move all logic here
+function ResearcherDashboardContent() {
   const pathname = usePathname();
+  const searchParams = useSearchParams(); // Explicitly calling it here to "own" the requirement inside the boundary
+  
   const [profile, setProfile] = useState<any>(null);
   const [isOwner, setIsOwner] = useState(false);
   const [tier, setTier] = useState<'free' | 'pro'>('free');
   const [myTrials, setMyTrials] = useState<any[]>([]);
   const [loading, setLoading] = useState(true);
   
-  // --- SEARCH, FILTER & SORT STATE ---
   const [searchTerm, setSearchTerm] = useState("");
   const [selectedConditions, setSelectedConditions] = useState<string[]>([]);
   const [sortBy, setSortBy] = useState<'title' | 'unread' | 'nct'>('unread');
 
-  // Sync current view with pathname
   const currentView = useMemo(() => {
     if (pathname.includes('/team')) return 'team';
     if (pathname.includes('/documents')) return 'documents';
@@ -173,7 +174,6 @@ export default function ResearcherOverview() {
 
   return (
     <div className="animate-in fade-in duration-500 relative">
-        {/* PRO UPGRADE HAZE OVERLAY */}
         {(currentView === 'team' || currentView === 'documents') && tier === 'free' && (
             <div className="absolute inset-0 z-50 flex items-center justify-center -mx-8 -my-8">
                 <div className="absolute inset-0 bg-slate-50/60 backdrop-blur-md rounded-3xl" />
@@ -227,7 +227,6 @@ export default function ResearcherOverview() {
           </div>
         </header>
 
-        {/* BLURRED CONTENT WRAPPER */}
         <div className={(currentView === 'team' || currentView === 'documents') && tier === 'free' ? 'blur-sm select-none pointer-events-none' : ''}>
             {conditions.length > 0 && (
                 <div className="flex flex-wrap gap-2 mb-8 items-center">
@@ -252,7 +251,6 @@ export default function ResearcherOverview() {
                                     </div>
                                     <h3 className="text-lg font-black text-slate-900 mb-2 leading-tight group-hover:text-indigo-600 transition-colors"><Link href={`/dashboard/researcher/study/${trial.nct_id}?tab=leads&claim_id=${trial.claim_id}`}>{trial.title}</Link></h3>
                                     <div className="flex items-center gap-4 text-[10px] font-bold text-slate-400 uppercase tracking-widest">
-                                        {/* FIXED: Now displays City and State */}
                                         <span className="flex items-center gap-1.5"><MapPin className="h-3.5 w-3.5 text-indigo-500" /> {trial.site_location?.city}, {trial.site_location?.state}</span>
                                         <span className="flex items-center gap-1.5 text-indigo-600 bg-indigo-50 px-2 rounded-md font-black">{trial.condition}</span>
                                     </div>
@@ -260,7 +258,6 @@ export default function ResearcherOverview() {
                                 <div className="mt-6 flex items-center gap-3">
                                     {isOwner && (
                                         <>
-                                            {/* RESTORED: Original Icons, Hrefs now direct even for Free users */}
                                             <Link 
                                               href={`/dashboard/researcher/study/${trial.nct_id}?tab=profile&claim_id=${trial.claim_id}`} 
                                               className={`p-2.5 border rounded-xl transition-all ${tier === 'pro' ? 'text-slate-400 hover:text-indigo-600 border-slate-100' : 'text-slate-400 border-slate-100 hover:bg-slate-50'}`}
@@ -293,5 +290,18 @@ export default function ResearcherOverview() {
             </div>
         </div>
     </div>
+  );
+}
+
+// 2. Wrap the logic in Suspense and export as default
+export default function ResearcherOverview() {
+  return (
+    <Suspense fallback={
+      <div className="flex items-center justify-center h-screen bg-white">
+        <Loader2 className="h-6 w-6 animate-spin text-slate-300" />
+      </div>
+    }>
+      <ResearcherDashboardContent />
+    </Suspense>
   );
 }

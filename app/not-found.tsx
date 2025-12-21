@@ -1,13 +1,14 @@
 "use client";
 
-import { useState, useEffect } from 'react';
+import { useState, useEffect, Suspense } from 'react'; // Added Suspense
 import Link from 'next/link';
 import { supabase } from '@/lib/supabase';
 import { 
   Home, MessageSquare, Send, CheckCircle2, Compass 
 } from 'lucide-react';
 
-export default function NotFound() {
+// 1. Move logic to a sub-component to allow Suspense wrapping
+function NotFoundContent() {
   const [message, setMessage] = useState("");
   const [email, setEmail] = useState("");
   const [user, setUser] = useState<any>(null);
@@ -169,5 +170,14 @@ ${historyString}
 
       </div>
     </div>
+  );
+}
+
+// 2. Wrap in Suspense to clear Next.js 16 build error
+export default function NotFound() {
+  return (
+    <Suspense fallback={<div className="min-h-screen bg-slate-50" />}>
+      <NotFoundContent />
+    </Suspense>
   );
 }

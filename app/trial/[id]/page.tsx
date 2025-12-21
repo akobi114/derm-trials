@@ -224,7 +224,7 @@ export default async function TrialDetail({ params, searchParams }: Props) {
             </section>
 
             {/* 4. FACILITY PHOTOS */}
-            {claim?.facility_photos?.length > 0 && (
+            {claim?.facility_photos && claim.facility_photos.length > 0 && (
                 <section className="bg-white rounded-2xl shadow-sm border border-slate-200 p-8">
                     <h3 className="text-lg font-bold text-slate-900 mb-4 flex items-center gap-2"><ImageIcon className="h-5 w-5 text-indigo-600" /> Facility & Staff</h3>
                     <div className="grid grid-cols-2 md:grid-cols-3 gap-4">
@@ -238,7 +238,7 @@ export default async function TrialDetail({ params, searchParams }: Props) {
             )}
 
             {/* 5. FAQ */}
-            {claim?.custom_faq?.length > 0 && (
+            {claim?.custom_faq && claim.custom_faq.length > 0 && (
                 <section className="bg-indigo-50 rounded-2xl border border-indigo-100 p-8">
                     <h3 className="text-lg font-bold text-slate-900 mb-6 flex items-center gap-2"><MessageCircle className="h-5 w-5 text-indigo-600" /> Frequently Asked Questions</h3>
                     <div className="space-y-4">

@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useEffect, useMemo, useRef } from "react";
+import { useState, useEffect, useMemo, useRef, Suspense } from "react"; // Added Suspense
 import Link from "next/link"; 
 import { useRouter, useSearchParams } from "next/navigation"; 
 import Navbar from "@/components/Navbar";
@@ -67,7 +67,8 @@ const isSameLocation = (leadCity: string, leadState: string, claimCity: string, 
     return false;
 };
 
-export default function AdminDashboard() {
+// Renamed to Content component for Suspense wrapping
+function AdminDashboardContent() {
   const router = useRouter();
   const searchParams = useSearchParams(); 
   const [loading, setLoading] = useState(true);
@@ -501,6 +502,7 @@ export default function AdminDashboard() {
                                                         <div className="font-bold text-slate-700">{contact.name || "Unknown Name"}</div>
                                                         {contact.phone && <div className="text-[10px] text-slate-500 font-mono flex items-center gap-1 mt-0.5"><Phone className="h-3 w-3 text-indigo-400"/> {contact.phone}</div>}
                                                         {contact.email && <div className="text-[10px] text-slate-500 font-mono flex items-center gap-1 mt-0.5"><Mail className="h-3 w-3 text-indigo-400"/> {contact.email}</div>}
+                                                        {!contact.phone && !contact.email && <div className="text-[10px] text-slate-400 italic">No direct info</div>}
                                                     </div>
                                                 </div>
                                             ))}
@@ -642,7 +644,6 @@ export default function AdminDashboard() {
                         {(() => {
                             const strategy = getContactStrategy(selectedLead);
                             
-                            // MERGED FACILITY + LOCAL CONTACTS
                             if (strategy.facility || strategy.localContacts.length > 0) {
                                 return (
                                     <div className="space-y-4">
@@ -748,6 +749,15 @@ export default function AdminDashboard() {
         </div>
       )}
     </div>
+  );
+}
+
+// Wrapper to provide Suspense context to the AdminDashboard
+export default function AdminDashboard() {
+  return (
+    <Suspense fallback={<div className="min-h-screen bg-slate-50 flex items-center justify-center"><Loader2 className="h-8 w-8 animate-spin text-indigo-600" /></div>}>
+      <AdminDashboardContent />
+    </Suspense>
   );
 }
 

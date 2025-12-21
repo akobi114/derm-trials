@@ -6,12 +6,13 @@ import { Search, Lock, Menu, X, LogOut, LayoutDashboard } from "lucide-react";
 import { useState, useEffect } from "react";
 import { supabase } from '@/lib/supabase';
 
-// Added interface for TypeScript prop validation
+// Added hideSearch to interface for TypeScript prop validation
 interface NavbarProps {
   transparent?: boolean;
+  hideSearch?: boolean;
 }
 
-export default function Navbar({ transparent }: NavbarProps) {
+export default function Navbar({ transparent, hideSearch }: NavbarProps) {
   const pathname = usePathname();
   const router = useRouter();
   
@@ -23,7 +24,8 @@ export default function Navbar({ transparent }: NavbarProps) {
   const isConditionsPage = pathname === '/conditions';
   const isConditionResultPage = pathname?.startsWith('/condition/');
   
-  const shouldShowFindTrial = !isHomePage && !isSearchPage && !isResearcherPage;
+  // Logic updated to respect the hideSearch prop
+  const shouldShowFindTrial = !isHomePage && !isSearchPage && !isResearcherPage && !hideSearch;
 
   const [isOpen, setIsOpen] = useState(false);
   const [isLoggedIn, setIsLoggedIn] = useState(false);

@@ -162,7 +162,7 @@ export default function StudyManager() {
       setTier(profileData.tier || 'free');
 
       // --- CRITICAL FIX: CLEAN THE ID ---
-      const rawId = Array.isArray(params.nct_id) ? params.nct_id[0] : params.nct_id;
+      const rawId = (Array.isArray(params.nct_id) ? params.nct_id[0] : params.nct_id) ?? '';
       const cleanId = decodeURIComponent(rawId).trim();
       
       console.log(`🔎 Seeking Claim for: "${cleanId}" (Researcher: ${profileData.id})`);
@@ -638,7 +638,8 @@ export default function StudyManager() {
 
   // --- ROBUST SCORING LOGIC (CASE INSENSITIVE) ---
   const calculateMatchScore = () => {
-    if (!selectedLead || !questions || questions.length === 0) return { count: 0, unsure: 0, total: 0 };
+    // UPDATED: Return all expected keys to avoid 'possibly undefined' error
+    if (!selectedLead || !questions || questions.length === 0) return { count: 0, unsure: 0, wrong: 0, total: 0 };
     const total = questions.length;
     let count = 0;
     let unsure = 0;
@@ -795,11 +796,11 @@ export default function StudyManager() {
                                         <h3 className="text-[10px] font-bold text-slate-400 uppercase mb-3 tracking-wider">Screener Responses & History</h3>
                                         
                                         {/* --- EDUCATIONAL ALERT BOX --- */}
-                                        {matchScore.wrong > 0 ? (
+                                        {(matchScore.wrong ?? 0) > 0 ? (
                                             <div className="mb-4 p-4 rounded-xl bg-amber-50 border border-amber-100 flex items-start gap-3">
                                                 <AlertCircle className="h-5 w-5 text-amber-500 shrink-0 mt-0.5" />
                                                 <div>
-                                                    <h4 className="text-sm font-bold text-amber-800">Criteria Mismatch ({matchScore.wrong} Missed)</h4>
+                                                    <h4 className="text-sm font-bold text-amber-800">Criteria Mismatch ({(matchScore.wrong ?? 0)} Missed)</h4>
                                                     <p className="text-xs text-amber-700 mt-1 leading-relaxed">
                                                         This patient answered incorrectly. Often this is a mistake. Call to verify. 
                                                         <br/><br/>

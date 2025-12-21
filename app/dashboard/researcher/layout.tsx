@@ -18,6 +18,7 @@ import {
 } from 'lucide-react';
 import Link from 'next/link';
 
+// --- SUB-COMPONENT: CONSUMES SEARCH PARAMS ---
 function LayoutContent({ children, profile, isOwner, userRole, tier, loading, handleLogout }: any) {
   const pathname = usePathname();
   const searchParams = useSearchParams();
@@ -178,6 +179,7 @@ function LayoutContent({ children, profile, isOwner, userRole, tier, loading, ha
   );
 }
 
+// --- MAIN WRAPPER ---
 export default function ResearcherLayout({ children }: { children: React.ReactNode }) {
   const router = useRouter();
   const [profile, setProfile] = useState<any>(null);
@@ -206,7 +208,6 @@ export default function ResearcherLayout({ children }: { children: React.ReactNo
     setIsOwner(!!profileResponse.data);
     setUserRole(profileResponse.data ? "owner" : (memberResponse.data?.role || "coordinator"));
     
-    // UPDATED: Prioritize 'tier' column and ensure clean string matching
     const dbTier = activeProfile.tier?.toString().trim().toLowerCase();
     setTier(dbTier === 'pro' ? 'pro' : 'free');
     

@@ -1,5 +1,6 @@
 "use client";
 
+import { Suspense } from "react"; // Added Suspense
 import { motion } from "framer-motion";
 import { 
   CheckCircle2, 
@@ -23,7 +24,8 @@ const fadeInUp = {
   transition: { duration: 0.6 }
 };
 
-export default function LearnPage() {
+// 1. Logic moved to internal component for Suspense wrapping
+function LearnContent() {
   return (
     <div className="min-h-screen bg-white">
       {/* 1. HERO SECTION: THE EMOTIONAL HOOK */}
@@ -249,5 +251,14 @@ export default function LearnPage() {
         <div className="absolute top-1/2 right-0 -translate-y-1/2 w-64 h-64 bg-rose-50 rounded-full blur-[100px] -z-10" />
       </section>
     </div>
+  );
+}
+
+// 2. Final export wrapped in Suspense for Next.js 16 build compliance
+export default function LearnPage() {
+  return (
+    <Suspense fallback={<div className="min-h-screen bg-white" />}>
+      <LearnContent />
+    </Suspense>
   );
 }
