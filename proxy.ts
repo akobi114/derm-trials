@@ -4,7 +4,8 @@ export const config = {
   matcher: '/:path*',
 };
 
-export function middleware(req: NextRequest) {
+// Renamed from 'middleware' to 'proxy'
+export function proxy(req: NextRequest) {
   // 1. Bypass check for public files (images, api, etc.)
   if (req.nextUrl.pathname.includes('.') || req.nextUrl.pathname.startsWith('/api')) {
     return NextResponse.next();
@@ -20,13 +21,16 @@ export function middleware(req: NextRequest) {
 
   if (basicAuth) {
     const authValue = basicAuth.split(' ')[1];
-    const [user, pwd] = atob(authValue).split(':');
+    try {
+      const [user, pwd] = atob(authValue).split(':');
 
-    // --- HARDCODED CREDENTIALS (NO SETTINGS REQUIRED) ---
-    // User: admin
-    // Pass: password
-    if (user === 'admin' && pwd === 'UniversalB0ard14!') {
-      return NextResponse.next();
+      // --- HARDCODED CREDENTIALS ---
+      if (user === 'admin' && pwd === 'UniversalB0ard14!') {
+        return NextResponse.next();
+      }
+    } catch (e) {
+      // Catch potential atob errors for malformed auth headers
+      console.error("Auth decoding failed", e);
     }
   }
 

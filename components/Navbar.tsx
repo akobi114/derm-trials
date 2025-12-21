@@ -6,7 +6,12 @@ import { Search, Lock, Menu, X, LogOut, LayoutDashboard } from "lucide-react";
 import { useState, useEffect } from "react";
 import { supabase } from '@/lib/supabase';
 
-export default function Navbar() {
+// Added interface for TypeScript prop validation
+interface NavbarProps {
+  transparent?: boolean;
+}
+
+export default function Navbar({ transparent }: NavbarProps) {
   const pathname = usePathname();
   const router = useRouter();
   
@@ -36,8 +41,12 @@ export default function Navbar() {
     return () => window.removeEventListener("scroll", handleScroll);
   }, []);
 
-  // --- UPDATED: Blend with all Premium/Institutional dark hero sections ---
-  const useTransparentMode = (isHomePage || isResearcherPage || isConditionsPage || isConditionResultPage) && !isScrolled;
+  // --- UPDATED: Prioritize explicit prop, fallback to route detection, restricted by scroll state ---
+  const useTransparentMode = (
+    transparent !== undefined 
+      ? transparent 
+      : (isHomePage || isResearcherPage || isConditionsPage || isConditionResultPage)
+  ) && !isScrolled;
 
   if (pathname?.startsWith('/admin')) return null;
 
