@@ -53,6 +53,14 @@ export default function Home() {
   const dropdownRef = useRef<HTMLDivElement>(null);
   const contentRef = useRef<HTMLDivElement>(null);
 
+  // --- NEW: Focused Scroll Trigger ---
+  // When predictions are shown, the page centers on the search bar
+  useEffect(() => {
+    if (showPredictions && dropdownRef.current) {
+      dropdownRef.current.scrollIntoView({ behavior: 'smooth', block: 'center' });
+    }
+  }, [showPredictions]);
+
   // Filter conditions based on input
   const filteredPredictions = query 
     ? PREDICTIVE_CONDITIONS.filter(c => 
@@ -144,7 +152,7 @@ export default function Home() {
            <Navbar />
         </div>
 
-        {/* SECTION 1: HERO CONTAINER (Removed overflow-hidden to allow dropdown to spill over) */}
+        {/* SECTION 1: HERO CONTAINER */}
         <section className="relative h-[100vh] flex items-center">
           <div className="absolute inset-0 z-0 overflow-hidden">
             <div className="absolute inset-0 bg-gradient-to-r from-slate-950/95 via-slate-900/40 to-transparent z-10" />
@@ -162,7 +170,6 @@ export default function Home() {
               transition={{ duration: 0.8 }}
               className="max-w-fit"
             >
-              {/* RECRUITING COUNT PRESERVED */}
               <div className="inline-flex items-center gap-2 px-4 py-1.5 rounded-full bg-white/10 backdrop-blur-md border border-white/20 text-white text-[10px] font-black uppercase tracking-[0.2em] mb-8">
                 <span className="relative flex h-2 w-2">
                   <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-emerald-400 opacity-75"></span>
@@ -171,7 +178,6 @@ export default function Home() {
                 {recruitingCount !== null ? `${recruitingCount} Active Studies Recruiting` : "Locating studies..."}
               </div>
 
-              {/* HEADLINE PRESERVED (STRICT FONT CLASSES) */}
               <h1 className="text-4xl sm:text-5xl md:text-[clamp(2.5rem,6vw,4.5rem)] font-black tracking-tight text-white leading-[1.02] mb-8">
                 <span className="block opacity-90 text-[0.85em] font-bold tracking-tight mb-1">Access Tomorrow’s</span>
                 <span className="block text-transparent bg-clip-text bg-gradient-to-r from-[#6366f1] to-[#a855f7] py-1">
@@ -183,13 +189,12 @@ export default function Home() {
                 <span className="block opacity-90 text-[0.85em] font-bold tracking-tight mt-1">Today.</span>
               </h1>
 
-              {/* BLURB PRESERVED */}
               <p className="text-lg md:text-xl text-slate-300 font-medium leading-relaxed mb-10 max-w-md">
                 Join the exclusive community matching patients with breakthrough skin research. Find trials for Psoriasis, Eczema, Acne, and more.
               </p>
 
               {/* SEARCH BAR WRAPPER */}
-              <div className="relative" ref={dropdownRef}>
+              <div className="relative scroll-mt-24" ref={dropdownRef}>
                 <form 
                   onSubmit={handleFormSubmit} 
                   className="w-full max-w-2xl bg-white p-2 rounded-2xl md:rounded-full shadow-2xl flex flex-col md:flex-row items-center gap-2"
@@ -241,7 +246,6 @@ export default function Home() {
                   </button>
                 </form>
 
-                {/* PREDICTIVE DROPDOWN (Ensured High Z-Index) */}
                 <AnimatePresence>
                   {showPredictions && (
                     <motion.div 
@@ -293,7 +297,6 @@ export default function Home() {
         </section>
       </div>
 
-      {/* REMAINDER OF FILE PRESERVED */}
       <div ref={contentRef} className="py-12 border-b border-slate-100 bg-white scroll-mt-20">
         <div className="max-w-7xl mx-auto px-6 flex flex-col md:flex-row items-center justify-between gap-8 opacity-40 grayscale hover:grayscale-0 transition-all duration-500">
           <p className="text-[10px] font-black uppercase tracking-[0.3em] text-slate-400">Research Partners</p>

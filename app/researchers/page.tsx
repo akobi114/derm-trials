@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from 'react';
+import { useState, useRef, useEffect } from 'react'; // Ensure these are imported
 import Link from "next/link";
 import Navbar from "@/components/Navbar";
 import { supabase } from '@/lib/supabase';
@@ -17,6 +17,35 @@ export default function ForResearchers() {
   const [trialResult, setTrialResult] = useState<any>(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  
+  // --- FOCUS STATE ---
+  const [isFocused, setIsFocused] = useState(false);
+
+  // --- 1. THE SCROLL TARGET ---
+  // We use a single ref for the section to ensure the "level" is identical
+  const searchSectionRef = useRef<HTMLElement>(null);
+
+  // --- 2. THE UNIFIED SCROLL TRIGGER ---
+  
+  // A. Focus Trigger: Scrolls to the section when clicking the box
+  useEffect(() => {
+    if (isFocused && searchSectionRef.current) {
+      searchSectionRef.current.scrollIntoView({ 
+        behavior: 'smooth', 
+        block: 'start' // Aligns to the top of the viewport
+      });
+    }
+  }, [isFocused]);
+
+  // B. Result Trigger: Scrolls to the EXACT SAME section when data is found
+  useEffect(() => {
+    if (trialResult && searchSectionRef.current) {
+      searchSectionRef.current.scrollIntoView({ 
+        behavior: 'smooth', 
+        block: 'start' // Matches the focus alignment exactly
+      });
+    }
+  }, [trialResult]);
 
   const handleLocateStudy = async (e?: React.FormEvent) => {
     if (e) e.preventDefault();
@@ -96,11 +125,10 @@ export default function ForResearchers() {
                 A centralized gateway for Principal Investigators to claim protocols and access a validated, AI-prescreened candidate queue.
               </p>
 
-              <div className="flex flex-col sm:flex-row gap-4">
-                {/* --- BIGGER BUTTON: Hero --- */}
+              <div className="flex flex-col sm:flex-row gap-4 mb-16">
                 <Link 
                   href="/auth/signup?role=researcher" 
-                  className="px-14 py-5 bg-indigo-600 text-white font-black uppercase tracking-[0.25em] text-[11px] rounded-full hover:bg-indigo-700 hover:scale-105 transition-all shadow-2xl shadow-indigo-500/20 text-center"
+                  className="px-8 py-4 bg-indigo-600 text-white font-black uppercase tracking-[0.25em] text-[11px] rounded-full hover:bg-indigo-700 hover:scale-105 transition-all shadow-2xl shadow-indigo-500/20 text-center"
                 >
                   Claim My Trials
                 </Link>
@@ -111,7 +139,8 @@ export default function ForResearchers() {
       </div>
 
       {/* --- SECTION 2: PROTOCOL LOCATOR --- */}
-      <section className="relative z-30 -mt-12 px-6">
+      {/* scroll-mt-24 provides the exact "breathing room" for the Navbar */}
+      <section ref={searchSectionRef} className="relative z-30 -mt-12 px-6 scroll-mt-24">
         <form 
           onSubmit={handleLocateStudy}
           className="max-w-4xl mx-auto bg-white p-2 rounded-2xl md:rounded-full shadow-2xl border border-slate-100 flex flex-col md:flex-row items-center gap-2"
@@ -126,6 +155,8 @@ export default function ForResearchers() {
                   placeholder="Enter NCT ID (e.g. NCT0543210)..." 
                   className="w-full bg-transparent outline-none text-slate-900 font-bold placeholder:text-slate-300 text-sm"
                   value={searchQuery}
+                  onFocus={() => setIsFocused(true)}
+                  onBlur={() => setIsFocused(false)}
                   onChange={(e) => setSearchQuery(e.target.value)}
                 />
               </div>
@@ -144,53 +175,54 @@ export default function ForResearchers() {
         </p>
       </section>
 
-      {/* --- SECTION 3: WIDECARD PREVIEW --- */}
-      <AnimatePresence>
-        {trialResult && (
-          <motion.section 
-            initial={{ opacity: 0, y: 20 }}
-            animate={{ opacity: 1, y: 0 }}
-            className="max-w-4xl mx-auto px-6 pt-12"
-          >
-             <div className="bg-white border border-slate-200 rounded-[32px] p-8 shadow-sm flex flex-col md:flex-row items-center justify-between gap-6">
-                <div className="flex-1">
-                  <div className="flex items-center gap-2 mb-3">
-                    <span className="px-3 py-1 bg-emerald-50 text-emerald-600 text-[10px] font-black uppercase rounded-full">
-                      {trialResult.status || 'Active'}
-                    </span>
-                    <span className="px-3 py-1 bg-indigo-50 text-indigo-600 text-[10px] font-black uppercase rounded-full flex items-center gap-1.5 animate-pulse">
-                      <Cpu className="h-3 w-3" /> AI Validation Enabled
-                    </span>
+      {/* --- SECTION 3: RESULTS --- */}
+      <div> 
+        <AnimatePresence>
+          {trialResult && (
+            <motion.section 
+              initial={{ opacity: 0, y: 20 }}
+              animate={{ opacity: 1, y: 0 }}
+              className="max-w-4xl mx-auto px-6 pt-12 pb-12"
+            >
+               <div className="bg-white border border-slate-200 rounded-[32px] p-8 shadow-sm flex flex-col md:flex-row items-center justify-between gap-6">
+                  <div className="flex-1">
+                    <div className="flex items-center gap-2 mb-3">
+                      <span className="px-3 py-1 bg-emerald-50 text-emerald-600 text-[10px] font-black uppercase rounded-full">
+                        {trialResult.status || 'Active'}
+                      </span>
+                      <span className="px-3 py-1 bg-indigo-50 text-indigo-600 text-[10px] font-black uppercase rounded-full flex items-center gap-1.5 animate-pulse">
+                        <Cpu className="h-3 w-3" /> AI Validation Enabled
+                      </span>
+                    </div>
+
+                    <Link 
+                      href={`/trial/${trialResult.nct_id}`} 
+                      target="_blank" 
+                      className="group inline-flex items-start gap-2 mb-2 outline-none"
+                    >
+                      <h3 className="text-xl font-black text-slate-900 uppercase tracking-tight leading-tight group-hover:text-indigo-600 transition-colors cursor-pointer decoration-indigo-600/30 group-hover:underline underline-offset-4">
+                        {trialResult.title || trialResult.condition}
+                      </h3>
+                      <ExternalLink className="h-4 w-4 text-slate-300 mt-1 group-hover:text-indigo-600 transition-colors" />
+                    </Link>
+
+                    <div className="flex items-center gap-4 text-slate-500 text-xs font-bold">
+                      <span className="flex items-center gap-1"><Activity className="h-3.5 w-3.5 text-indigo-500" /> {trialResult.phase || 'Phase Not Set'}</span>
+                      <span className="flex items-center gap-1 text-emerald-600"><Zap className="h-3 w-3" /> 90% Lead Fidelity</span>
+                    </div>
                   </div>
 
                   <Link 
-                    href={`/trial/${trialResult.nct_id}`} 
-                    target="_blank" 
-                    className="group inline-flex items-start gap-2 mb-2 outline-none"
+                    href={`/auth/signup?role=researcher&claim=${trialResult.nct_id}`} 
+                    className="px-8 py-4 bg-indigo-600 text-white font-black uppercase tracking-[0.2em] text-[10px] rounded-full hover:bg-indigo-700 hover:scale-105 transition-all shadow-xl shadow-indigo-500/10 whitespace-nowrap"
                   >
-                    <h3 className="text-xl font-black text-slate-900 uppercase tracking-tight leading-tight group-hover:text-indigo-600 transition-colors cursor-pointer decoration-indigo-600/30 group-hover:underline underline-offset-4">
-                      {trialResult.title || trialResult.condition}
-                    </h3>
-                    <ExternalLink className="h-4 w-4 text-slate-300 mt-1 group-hover:text-indigo-600 transition-colors" />
+                    Claim My Trials
                   </Link>
-
-                  <div className="flex items-center gap-4 text-slate-500 text-xs font-bold">
-                    <span className="flex items-center gap-1"><Activity className="h-3.5 w-3.5 text-indigo-500" /> {trialResult.phase || 'Phase Not Set'}</span>
-                    <span className="flex items-center gap-1 text-emerald-600"><Zap className="h-3 w-3" /> 90% Lead Fidelity</span>
-                  </div>
-                </div>
-
-                {/* --- BIGGER BUTTON: Search Result --- */}
-                <Link 
-                  href={`/auth/signup?role=researcher&claim=${trialResult.nct_id}`} 
-                  className="px-10 py-5 bg-indigo-600 text-white font-black uppercase tracking-[0.2em] text-[10px] rounded-full hover:bg-indigo-700 hover:scale-105 transition-all shadow-xl shadow-indigo-500/10 whitespace-nowrap"
-                >
-                  Claim My Trials
-                </Link>
-             </div>
-          </motion.section>
-        )}
-      </AnimatePresence>
+               </div>
+            </motion.section>
+          )}
+        </AnimatePresence>
+      </div>
 
       {/* --- SECTION 4: CAPABILITIES --- */}
       <section className="py-32 px-6">
@@ -212,7 +244,7 @@ export default function ForResearchers() {
               </div>
               <h3 className="text-xl font-black text-slate-900 tracking-tight">High-Fidelity Leads</h3>
               <p className="text-slate-500 leading-relaxed text-sm font-medium">
-                Stop wasting time on non-qualifiers. Only high-probability candidates who meet protocol benchmarks reach your dashboard.
+                Stop wasting time on non-qualifiers. Have high-probability candidates who meet protocol benchmarks reach your dashboard.
               </p>
             </div>
 
@@ -291,10 +323,9 @@ export default function ForResearchers() {
           <p className="text-slate-500 mb-10 text-lg font-medium max-w-xl mx-auto leading-relaxed">
             Claims are manually verified to ensure protocol security. Registration grants access to your study dashboard and AI-validated candidate queue.
           </p>
-          {/* --- BIGGER BUTTON: Final CTA --- */}
           <Link 
             href="/auth/signup?role=researcher" 
-            className="inline-flex items-center gap-6 px-16 py-6 bg-slate-950 text-white font-black uppercase tracking-[0.25em] text-[12px] rounded-full hover:bg-slate-800 hover:scale-105 transition-all shadow-2xl shadow-slate-900/20"
+            className="inline-flex items-center gap-6 px-10 py-4 bg-slate-950 text-white font-black uppercase tracking-[0.25em] text-[12px] rounded-full hover:bg-slate-800 hover:scale-105 transition-all shadow-2xl shadow-slate-900/20"
           >
             Claim My Trials <ArrowRight className="h-5 w-5" />
           </Link>
