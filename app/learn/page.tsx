@@ -33,7 +33,7 @@ function LearnContent() {
         <div className="absolute inset-0 z-0">
           <div className="absolute inset-0 bg-gradient-to-r from-slate-900/90 via-slate-900/40 to-transparent z-10" />
           <img 
-            src="/images/learn/hero-wellness.jpg" 
+            src="/images/learn/hero-learn.jpg" 
             alt="Wellness and Hope" 
             className="w-full h-full object-cover"
           />
