@@ -1,10 +1,10 @@
+export const dynamic = 'force-dynamic';
+
 import { NextResponse } from 'next/server';
-import { supabaseServer as supabase } from '@/lib/supabaseServer';
+import { getSupabaseServer } from '@/lib/supabaseServer'; // Updated import to use the function
 import { GoogleGenerativeAI } from '@google/generative-ai';
 
 // RATE LIMIT SETTINGS: 
-// Google Free Tier allows ~15 requests/min. 
-// We wait 6 seconds between items to be safe.
 const DELAY_MS = 1000;
 const BATCH_SIZE = 15;
 
@@ -12,6 +12,14 @@ const wait = (ms: number) => new Promise(resolve => setTimeout(resolve, ms));
 
 export async function GET() {
   try {
+    // Initialize the Supabase client inside the GET handler to avoid build-time crashes
+    const supabase = getSupabaseServer();
+
+    if (!supabase) {
+      console.error("Supabase client failed to initialize due to missing keys.");
+      return NextResponse.json({ error: "Configuration missing" }, { status: 500 });
+    }
+
     console.log("--- 🤖 Gemini Agent (Safe Mode) Starting ---");
 
     // --- DEEP DEBUG LOGGING START ---
@@ -31,10 +39,6 @@ export async function GET() {
     });
 
     // --- 1. FETCH BATCH (UPDATED SAFETY LOGIC) ---
-    // We now enforce TWO conditions:
-    // 1. simple_summary MUST be null
-    // 2. screener_questions MUST be null
-    // If either one has data (e.g. you manually added questions), we SKIP it.
     const { data: trials, error } = await supabase
       .from('trials')
       .select('*')
@@ -164,7 +168,6 @@ export async function GET() {
     return NextResponse.json({ success: true, processed: results.length, details: results });
 
   } catch (error: any) {
-    // Force the full error to print to the terminal console
     console.error("🔥 CRITICAL AGENT ERROR:", error); 
     return NextResponse.json({ error: error.message }, { status: 500 });
   }
