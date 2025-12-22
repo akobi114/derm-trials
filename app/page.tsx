@@ -288,7 +288,7 @@ export default function Home() {
             initial={{ opacity: 0, y: 10 }}
             animate={{ opacity: 1, y: 0 }}
             transition={{ delay: 1.5, duration: 1 }}
-            className="absolute bottom-10 left-1/2 -translate-x-1/2 z-30 flex flex-col items-center text-white/50 hover:text-white transition-colors group"
+            className="absolute bottom-10 right-10 z-30 flex flex-col items-center text-white/50 hover:text-white transition-colors group"
           >
             <div className="p-3 rounded-full bg-white/5 backdrop-blur-md border border-white/10 group-hover:bg-white/10 group-hover:border-white/20 transition-all">
               <ChevronDown className="h-5 w-5" />
