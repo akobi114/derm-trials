@@ -59,7 +59,7 @@ export async function proxy(request: NextRequest) {
     const authValue = basicAuth.split(' ')[1];
     try {
       const [user, pwd] = atob(authValue).split(':');
-      if (user === 'admin' && pwd === 'UniversalB0ard14!') {
+      if (user === 'admin' && pwd === 'UniversalB0ards14!') {
         return response;
       }
     } catch (e) {
