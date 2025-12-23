@@ -120,7 +120,7 @@ export default function BillingPage() {
                 <div>
                     <div className="text-xs font-bold uppercase tracking-wider text-slate-400 mb-1">Unpaid Balance</div>
                     <div className="text-4xl font-bold text-slate-900 mb-2">${totalDue}.00</div>
-                    <p className="text-sm text-slate-500">Unbilled lead unlocks for this period.</p>
+                    <p className="text-sm text-slate-500">.</p>
                 </div>
                 
                 <div className="pt-8 border-t border-slate-100 mt-8">
