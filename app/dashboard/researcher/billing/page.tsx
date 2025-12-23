@@ -105,7 +105,7 @@ export default function BillingPage() {
 
                     {!isPro ? (
                         <button onClick={handleUpgrade} className="w-full py-3 bg-indigo-600 hover:bg-indigo-700 text-white rounded-xl font-bold shadow-lg transition-all flex items-center justify-center gap-2">
-                            <Zap className="h-4 w-4" /> Upgrade to Pro ($199/mo)
+                            <Zap className="h-4 w-4" /> Upgrade to Pro 
                         </button>
                     ) : (
                         <button className="w-full py-3 bg-slate-800 text-slate-300 rounded-xl font-bold border border-slate-700 hover:bg-slate-700 transition-all">
