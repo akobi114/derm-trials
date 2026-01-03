@@ -1,22 +1,56 @@
 import { NextResponse } from 'next/server';
-import { supabase } from '@/lib/supabase';
+// Switched to supabaseServer to ensure RLS is bypassed for background sync tasks
+import { supabaseServer as supabase } from '@/lib/supabaseServer';
 
 const BASE_URL = "https://clinicaltrials.gov/api/v2/studies";
 
 // Helper for polite waiting with random "jitter"
 const wait = (ms: number) => new Promise(resolve => setTimeout(resolve, ms + Math.random() * 2000));
 
-export async function GET() {
+export async function GET(request: Request) {
   try {
+    // ==========================================
+    // 1. SECURITY CHECK (Admin Only)
+    // ==========================================
+    // Retrieve the token from the Authorization header (Fixes 401 in Incognito)
+    const authHeader = request.headers.get('Authorization');
+    const token = authHeader?.split(' ')[1];
+
+    if (!token) {
+      return NextResponse.json({ error: "Unauthorized. No token provided." }, { status: 401 });
+    }
+
+    // Verify the user using the provided JWT token
+    const { data: { user }, error: authError } = await supabase.auth.getUser(token);
+
+    if (authError || !user) {
+      return NextResponse.json({ error: "Unauthorized. Invalid session." }, { status: 401 });
+    }
+
+    // We check the 'admins' table to verify they have the correct permissions.
+    const { data: adminRecord, error: adminError } = await supabase
+      .from('admins')
+      .select('role')
+      .eq('user_id', user.id)
+      .single();
+
+    if (adminError || !adminRecord) {
+      console.warn(`Unauthorized sync attempt by user: ${user.email}`);
+      return NextResponse.json({ error: "Forbidden. Admin access required." }, { status: 403 });
+    }
+
+    // ==========================================
+    // 2. SYNC ENGINE LOGIC
+    // ==========================================
     const logs: string[] = [];
     let totalProcessed = 0;
     let newTrials = 0;
     let updatedTrials = 0;
 
-    // 1. QUEUE: Fetch 3 'pending' or 'partial' conditions
+    // Fetch 3 'pending' or 'partial' conditions, including api_search_term and synonyms
     const { data: queue, error: queueError } = await supabase
       .from('conditions')
-      .select('title, slug, next_page_token, sync_status')
+      .select('title, slug, api_search_term, synonyms, next_page_token, sync_status')
       .in('sync_status', ['pending', 'partial'])
       .order('sync_priority', { ascending: false })
       .order('last_synced_at', { ascending: true, nullsFirst: true })
@@ -27,14 +61,17 @@ export async function GET() {
     }
 
     for (const item of queue) {
-      console.log(`[SYNC] Processing: ${item.title}`);
+      // Use the surgically clean API search term if available, fallback to title
+      const searchTerm = item.api_search_term || item.title;
+      console.log(`[SYNC START] Processing condition: "${searchTerm}"`);
+      
       await supabase.from('conditions').update({ sync_status: 'syncing' }).eq('slug', item.slug);
 
       const params = new URLSearchParams({
-        "query.cond": item.title,
+        "query.cond": searchTerm,
         "query.locn": "United States",
         "filter.overallStatus": "RECRUITING",
-        "pageSize": "20", // The Paced Speed for safe pagination
+        "pageSize": "3", // Current test limit
         "format": "json"
       });
 
@@ -44,7 +81,6 @@ export async function GET() {
 
       let response = await fetch(`${BASE_URL}?${params.toString()}`);
 
-      // --- 429 RATE LIMIT HANDLING (Single retry at 40s) ---
       if (response.status === 429) {
         console.warn(`[429] Limit hit. Waiting 40s before single retry...`);
         await wait(40000); 
@@ -64,25 +100,47 @@ export async function GET() {
       const studies = data.studies || [];
       const apiNextToken = data.nextPageToken;
 
+      console.log(`   > API returned ${studies.length} trials for "${searchTerm}"`);
+
       for (const study of studies) {
         const proto = study.protocolSection;
         const derived = study.derivedSection;
         const nctId = proto.identificationModule?.nctId;
         if (!nctId) continue;
 
-        // --- 1. MESH & SYNONYM EXTRACTION (New Intelligence) ---
+        // --- 3. THOROUGH SEARCH KEYWORD EXTRACTION ---
+        // We pull MeSH Terms and Ancestors (e.g., "Skin Diseases" for Eczema)
         const meshTerms = derived?.conditionBrowseModule?.meshes?.map((m: any) => m.term) || [];
         const meshAncestors = derived?.conditionBrowseModule?.ancestors?.map((a: any) => a.term) || [];
-        const searchKeywords = Array.from(new Set([...meshTerms, ...meshAncestors]));
+        
+        // We pull Sponsor Keywords (e.g., "Acne inversa" for HS) and Official Condition terms
+        const condModule = proto.conditionsModule;
+        const sponsorKeywords = condModule?.keywords || [];
+        const officialConditions = condModule?.conditions || [];
 
-        // --- 2. FULL DATA MAPPING (Restored to 100% Original Parity) ---
+        // Parse any synonyms stored in our database for this condition
+        const rawSynonyms = item.synonyms ? item.synonyms.split(',').map((s: string) => s.trim()) : [];
+
+        // Combine ALL related terms for the "Secret Sauce" thorough search
+        // This makes "Atopic Dermatitis" find "Eczema" and "Pimple" find "Acne"
+        const searchKeywords = Array.from(new Set([
+          ...meshTerms, 
+          ...meshAncestors, 
+          ...sponsorKeywords, 
+          ...officialConditions,
+          ...rawSynonyms,
+          item.title,
+          item.api_search_term || ""
+        ])).filter(Boolean);
+
+        // Combine sponsor keywords and official conditions for the conditions_list field
+        const combinedConditionsList = Array.from(new Set([...officialConditions, ...sponsorKeywords]));
+
         const design = proto.designModule;
         const arms = proto.armsInterventionsModule;
         const outcomes = proto.outcomesModule;
         const contacts = proto.contactsLocationsModule;
-        const condModule = proto.conditionsModule;
 
-        // Interventions mapping
         let finalInterventions = [];
         if (arms?.armGroups) {
           finalInterventions = arms.armGroups.map((arm: any) => ({
@@ -105,6 +163,7 @@ export async function GET() {
         const usLocations = rawLocations.map((loc: any) => ({
             facility: loc.facility, city: loc.city, state: loc.state, zip: loc.zip, country: loc.country,
             geoPoint: loc.geoPoint,
+            status: loc.status,
             location_contacts: loc.contacts?.map((c: any) => ({ 
               name: c.name || null, phone: c.phone || null, email: c.email || null, role: c.role || "Contact" 
             })) || [],
@@ -114,19 +173,24 @@ export async function GET() {
         }));
 
         const locationString = usLocations.length > 0 ? `${usLocations[0].city}, ${usLocations[0].state}` : "United States";
-        const keywords = condModule?.keywords || condModule?.conditions || [];
 
-        // --- 3. PRESERVE AI CUSTOMIZATIONS ---
         const { data: existing } = await supabase.from('trials').select('simple_summary, screener_questions, ai_benefits').eq('nct_id', nctId).single();
 
+        /**
+         * NOTE: 'locations' is deliberately omitted from trialData.
+         * The database Trigger (update_trial_locations_json) handles the 
+         * automatic population of the trials.locations JSONB cache based 
+         * on refined data from the trial_locations table.
+         */
         const trialData: any = {
           nct_id: nctId,
           title: proto.identificationModule?.briefTitle,
           official_title: proto.identificationModule?.officialTitle,
           brief_summary: proto.descriptionModule?.briefSummary,
           detailed_summary: proto.descriptionModule?.detailedDescription,
-          condition: item.title, 
-          conditions_list: keywords,
+          // UPDATED: Use the official database title to ensure category page links work correctly
+          condition: item.title,
+          conditions_list: combinedConditionsList,
           sponsor: proto.sponsorCollaboratorsModule?.leadSponsor?.name,
           status: proto.statusModule?.overallStatus?.replace(/_/g, ' '),
           phase: design?.phases?.[0] || 'Not Applicable',
@@ -141,14 +205,14 @@ export async function GET() {
             masking: design?.designInfo?.maskingInfo?.masking,
             primaryPurpose: design?.designInfo?.primaryPurpose,
             interventionModel: design?.designInfo?.interventionModel,
-            observationalModel: design?.bioSpec?.retention // RESTORED
+            observationalModel: design?.bioSpec?.retention
           },
           interventions: finalInterventions,
           primary_outcomes: outcomes?.primaryOutcomes?.map(mapOutcome) || [],
           secondary_outcomes: outcomes?.secondaryOutcomes?.map(mapOutcome) || [],
           location: locationString,
-          locations: usLocations,
           central_contact: contacts?.centralContacts?.[0] || null,
+          // UPDATED: Exhaustive list of search terms from MeSH, Sponsors, and Synonyms
           search_keywords: searchKeywords,
           last_updated: new Date().toISOString(),
           simple_summary: existing?.simple_summary || null,
@@ -156,31 +220,32 @@ export async function GET() {
           ai_benefits: existing?.ai_benefits || null
         };
 
-        const { error: upsertErr } = await supabase.from('trials').upsert(trialData, { onConflict: 'nct_id' });
+        const { data: trialRecord, error: upsertErr } = await supabase
+          .from('trials')
+          .upsert(trialData, { onConflict: 'nct_id' })
+          .select('id')
+          .single();
         
-        if (!upsertErr) {
+        if (!upsertErr && trialRecord) {
           existing ? updatedTrials++ : newTrials++;
           totalProcessed++;
           
-          // --- 4. 3-TIER GEOCODING & STUDY_SITES ---
-          await supabase.from('study_sites').delete().eq('nct_id', nctId);
           const sitesToInsert = [];
 
           for (const loc of usLocations) {
-             let lat = null; let lon = null;
+             let lat = null;
+             let lon = null;
+             
              if (loc.zip) {
-                // Tier 1: Fast Cache
                 const { data: cached } = await supabase.from('zip_coordinates').select('*').eq('zip_code', loc.zip).maybeSingle();
                 if (cached) {
                     lat = cached.latitude; lon = cached.longitude;
                 } else {
-                    // Tier 2: Reference Table Fallback
                     const { data: fallback } = await supabase.from('zip_codes').select('latitude, longitude').eq('zip_code', loc.zip).maybeSingle();
                     if (fallback) {
                         lat = fallback.latitude; lon = fallback.longitude;
                         await supabase.from('zip_coordinates').insert({ zip_code: loc.zip, latitude: lat, longitude: lon });
                     } else {
-                        // Tier 3: External API (Final Resort)
                         try {
                           const zRes = await fetch(`https://api.zippopotam.us/us/${loc.zip}`);
                           if (zRes.ok) {
@@ -193,25 +258,65 @@ export async function GET() {
                     }
                 }
              }
-             sitesToInsert.push({ nct_id: nctId, city: loc.city, state: loc.state, zip: loc.zip, country: loc.country, latitude: lat, longitude: lon, geo_point: (lat && lon) ? `POINT(${lon} ${lat})` : null });
+
+             if (!lat && !lon && loc.geoPoint) {
+                lat = loc.geoPoint.lat;
+                lon = loc.geoPoint.lon;
+             }
+
+             const siteNumberMatch = loc.facility?.match(/Site Number\s*:\s*(\d+)/i);
+
+             sitesToInsert.push({ 
+                trial_id: trialRecord.id, 
+                facility_name: loc.facility,
+                site_number: siteNumberMatch ? siteNumberMatch[1] : null,
+                city: loc.city, 
+                state: loc.state, 
+                zip: loc.zip, 
+                lat: lat, 
+                lon: lon,
+                status: loc.status?.replace(/_/g, ' ') || 'RECRUITING',
+                location_contacts: loc.location_contacts,
+                investigators: loc.investigators
+             });
           }
-          if (sitesToInsert.length > 0) await supabase.from('study_sites').insert(sitesToInsert);
+          
+          if (sitesToInsert.length > 0) {
+            // DUPLICATE FILTER: Ensures unique Facility+City combo per trial
+            const uniqueSites = sitesToInsert.filter((site, index, self) =>
+              index === self.findIndex((s) => (
+                s.facility_name === site.facility_name && s.city === site.city
+              ))
+            );
+
+            const { error: locError } = await supabase
+              .from('trial_locations')
+              .upsert(uniqueSites, { onConflict: 'trial_id,facility_name,city' });
+
+            if (locError) {
+              console.error(`     - [ERROR] Site sync failed for ${nctId}:`, locError.message);
+            } else {
+              console.log(`     - [LOCATION SYNC] ${nctId}: Synced ${uniqueSites.length} unique site rows.`);
+            }
+          }
         }
       }
 
-      // --- 5. CHECKPOINT UPDATE ---
       const nextStatus = apiNextToken ? 'partial' : 'completed';
       await supabase.from('conditions').update({ 
         sync_status: nextStatus, 
         next_page_token: apiNextToken || null,
         last_synced_at: new Date().toISOString() 
       }).eq('slug', item.slug);
+      
+      console.log(`[SYNC COMPLETE] Condition: "${searchTerm}" | Status: ${nextStatus}`);
 
       await wait(3000); 
     }
 
     return NextResponse.json({ success: true, processed: totalProcessed, new: newTrials, updated: updatedTrials });
   } catch (err: any) {
+    console.error("Critical Sync Error:", err.message);
     return NextResponse.json({ error: err.message }, { status: 500 });
   }
 }

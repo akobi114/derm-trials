@@ -11,51 +11,31 @@ import {
   Users, 
   CreditCard, 
   Crown, 
-  Sparkles, 
-  FileText,
-  Plus,
+  BookOpen, // For Protocol Library
+  FolderOpen, // For Resources
+  UserCircle,
+  ShieldCheck, // For Admin Section
   Lock 
 } from 'lucide-react';
 import Link from 'next/link';
 
-// --- SUB-COMPONENT: CONSUMES SEARCH PARAMS ---
-function LayoutContent({ children, profile, isOwner, userRole, tier, loading, handleLogout }: any) {
+// --- SIDEBAR CONTENT ---
+function LayoutContent({ children, profile, organization, userRole, tier, loading, handleLogout }: any) {
   const pathname = usePathname();
   const searchParams = useSearchParams();
 
+  // OAM Check: Strict check for the "Owner" flag
+  const isOAM = profile?.is_oam === true;
+
+  // --- GATEKEEPING CONFIG ---
   const gateConfig = useMemo(() => {
     const currentTab = searchParams.get('tab');
     
-    if (pathname.includes('/team')) {
-      return {
-        title: "Scale Your Research Team",
-        description: "Add coordinators, investigators, and assistants to your dashboard with granular permissions and shared lead management.",
-        isRestricted: true
-      };
-    }
-    
-    if (pathname.includes('/documents')) {
-      return {
-        title: "Patient Flyers & Group Page",
-        description: "Generate IRB-ready recruitment flyers and unlock your public site portfolio to showcase all active trials on a single branded page.",
-        isRestricted: true
-      };
-    }
-
-    if (pathname.includes('/study/')) {
-      if (currentTab === 'analytics') return { 
+    // Example: Locking advanced analytics in the future
+    if (pathname.includes('/study/') && currentTab === 'analytics') {
+      return { 
         title: "Unlock Clinical Intelligence", 
-        description: "Access deep insights into recruitment performance, drop-off rates, and patient demographics.", 
-        isRestricted: true 
-      };
-      if (currentTab === 'profile') return { 
-        title: "Unlock Custom Branding", 
-        description: "Free accounts use our standard AI overview. Upgrade to Pro to customize the text and screening questions.", 
-        isRestricted: true 
-      };
-      if (currentTab === 'media') return { 
-        title: "Boost Engagement with Media", 
-        description: "Professional trials get 3x more applicants. Upgrade to add an Intro Video, Facility Photos, and Custom FAQs.", 
+        description: "Access deep insights into recruitment performance and site-wide metrics.", 
         isRestricted: true 
       };
     }
@@ -64,92 +44,117 @@ function LayoutContent({ children, profile, isOwner, userRole, tier, loading, ha
   }, [pathname, searchParams]);
 
   if (loading) return (
-    <div className="min-h-screen flex items-center justify-center">
-      <Loader2 className="h-8 w-8 animate-spin text-slate-400" />
+    <div className="min-h-screen flex items-center justify-center bg-white">
+      <Loader2 className="h-8 w-8 animate-spin text-indigo-600" />
     </div>
   );
 
   return (
     <div className="flex h-screen w-full bg-slate-50 font-sans text-slate-900 overflow-hidden">
+      
+      {/* SIDEBAR NAVIGATION */}
       <aside className="w-64 flex-shrink-0 border-r border-slate-200 bg-white flex flex-col z-50">
-        <div className="p-6 h-20 flex items-center border-b border-slate-100 font-bold text-xl tracking-tight">
+        
+        {/* LOGO AREA */}
+        <div className="p-6 h-20 flex items-center border-b border-slate-100 font-black text-xl tracking-tight">
           Derm<span className="text-indigo-600">Trials</span>
         </div>
-        <nav className="flex-1 p-4 space-y-1 overflow-y-auto">
-          <Link 
-            href="/dashboard/researcher" 
-            className={`flex items-center gap-3 px-4 py-3 rounded-lg font-medium text-sm transition-colors ${pathname === '/dashboard/researcher' ? 'bg-indigo-50 text-indigo-700' : 'text-slate-600 hover:bg-slate-50'}`}
-          >
-            <LayoutDashboard className="h-5 w-5" /> Overview
-          </Link>
 
-          {isOwner && (
+        <nav className="flex-1 p-4 space-y-8 overflow-y-auto custom-scrollbar">
+          
+          {/* SECTION 1: CLINICAL OPERATIONS */}
+          <div className="space-y-1">
+            <p className="px-4 text-[10px] font-black text-slate-400 uppercase tracking-widest mb-2">Clinical Ops</p>
+            
             <Link 
-              href="/dashboard/researcher/AddStudy" 
-              className={`flex items-center gap-3 px-4 py-3 rounded-lg font-medium text-sm transition-colors ${pathname.includes('/AddStudy') ? 'bg-indigo-50 text-indigo-700' : 'text-slate-600 hover:bg-slate-50'}`}
+              href="/dashboard/researcher" 
+              className={`flex items-center gap-3 px-4 py-2.5 rounded-xl font-bold text-xs transition-colors ${pathname === '/dashboard/researcher' ? 'bg-indigo-50 text-indigo-700' : 'text-slate-500 hover:bg-slate-50 hover:text-slate-900'}`}
             >
-              <Plus className="h-5 w-5" /> Add New Study
+              <LayoutDashboard className="h-4 w-4" /> Overview
             </Link>
-          )}
 
-          {(isOwner || userRole === 'admin') && (
+            <Link 
+              href="/dashboard/researcher/library" 
+              className={`flex items-center gap-3 px-4 py-2.5 rounded-xl font-bold text-xs transition-colors ${pathname.includes('/library') ? 'bg-indigo-50 text-indigo-700' : 'text-slate-500 hover:bg-slate-50 hover:text-slate-900'}`}
+            >
+              <BookOpen className="h-4 w-4" /> Protocol Library
+            </Link>
+
             <Link 
               href="/dashboard/researcher/team" 
-              className={`flex items-center gap-3 px-4 py-3 rounded-lg font-medium text-sm transition-colors ${pathname.includes('/team') ? 'bg-indigo-50 text-indigo-700' : 'text-slate-600 hover:bg-slate-50'}`}
+              className={`flex items-center gap-3 px-4 py-2.5 rounded-xl font-bold text-xs transition-colors ${pathname.includes('/team') ? 'bg-indigo-50 text-indigo-700' : 'text-slate-500 hover:bg-slate-50 hover:text-slate-900'}`}
             >
-              <Users className="h-5 w-5" /> Team Management
-              {tier !== 'pro' && <span className="ml-auto text-[8px] bg-slate-100 text-slate-500 px-1.5 py-0.5 rounded font-bold uppercase">Pro</span>}
+              <Users className="h-4 w-4" /> Research Team
             </Link>
+
+            <Link 
+              href="/dashboard/researcher/resources" 
+              className={`flex items-center gap-3 px-4 py-2.5 rounded-xl font-bold text-xs transition-colors ${pathname.includes('/resources') ? 'bg-indigo-50 text-indigo-700' : 'text-slate-500 hover:bg-slate-50 hover:text-slate-900'}`}
+            >
+              <FolderOpen className="h-4 w-4" /> Study Resources
+            </Link>
+          </div>
+
+          {/* SECTION 2: ORGANIZATION (OAM ONLY) */}
+          {isOAM && (
+            <div className="space-y-1">
+              <p className="px-4 text-[10px] font-black text-slate-400 uppercase tracking-widest mb-2">Organization</p>
+              
+              <Link 
+                href="/dashboard/researcher/organization-settings" 
+                className={`flex items-center gap-3 px-4 py-2.5 rounded-xl font-bold text-xs transition-colors ${pathname.includes('/organization-settings') ? 'bg-indigo-50 text-indigo-700' : 'text-slate-500 hover:bg-slate-50 hover:text-slate-900'}`}
+              >
+                <ShieldCheck className="h-4 w-4" /> Organization Settings
+              </Link>
+            </div>
           )}
 
-          <Link 
-            href="/dashboard/researcher/documents" 
-            className={`flex items-center gap-3 px-4 py-3 rounded-lg font-medium text-sm transition-colors ${pathname.includes('/documents') ? 'bg-indigo-50 text-indigo-700' : 'text-slate-600 hover:bg-slate-50'}`}
-          >
-            <FileText className="h-5 w-5" /> Patient Flyers & Group Page
-            {tier !== 'pro' && <span className="ml-auto text-[8px] bg-slate-100 text-slate-500 px-1.5 py-0.5 rounded font-bold uppercase">Pro</span>}
-          </Link>
+          {/* SECTION 3: PERSONAL */}
+          <div className="space-y-1">
+            <p className="px-4 text-[10px] font-black text-slate-400 uppercase tracking-widest mb-2">Account</p>
+            
+            <Link 
+              href="/dashboard/researcher/profile" 
+              className={`flex items-center gap-3 px-4 py-2.5 rounded-xl font-bold text-xs transition-colors ${pathname.includes('/profile') ? 'bg-indigo-50 text-indigo-700' : 'text-slate-500 hover:bg-slate-50 hover:text-slate-900'}`}
+            >
+              <UserCircle className="h-4 w-4" /> My Profile
+            </Link>
+          </div>
 
-          {isOwner && (
-            <>
-              <Link href="/dashboard/researcher/billing" className={`flex items-center gap-3 px-4 py-3 rounded-lg font-medium text-sm transition-colors ${pathname.includes('/billing') ? 'bg-indigo-50 text-indigo-700' : 'text-slate-600 hover:bg-slate-50'}`}>
-                <CreditCard className="h-5 w-5" /> Billing
-              </Link>
-              <Link href="/dashboard/researcher/settings" className={`flex items-center gap-3 px-4 py-3 rounded-lg font-medium text-sm transition-colors ${pathname.includes('/settings') ? 'bg-indigo-50 text-indigo-700' : 'text-slate-600 hover:bg-slate-50'}`}>
-                <Settings className="h-5 w-5" /> Settings
-              </Link>
-            </>
-          )}
         </nav>
 
-        {isOwner && (
-            <div className="px-4 mb-4">
-                <div className={`p-4 rounded-xl border ${tier === 'pro' ? 'bg-slate-900 text-white border-slate-800' : 'bg-white border-slate-200'}`}>
-                    <div className="flex items-center justify-between mb-2">
-                        <span className="text-[10px] font-bold uppercase opacity-60">Current Plan</span>
-                        {tier === 'pro' && <Crown className="h-4 w-4 text-yellow-400 fill-yellow-400" />}
-                    </div>
-                    <div className="flex items-center gap-2 mb-2">
-                        <div className={`text-lg font-extrabold ${tier === 'pro' ? 'text-white' : 'text-slate-900'}`}>
-                            {tier === 'pro' ? 'Pro Plan' : 'Free Plan'}
-                        </div>
-                    </div>
-                    {tier === 'free' && (
-                        <Link href="/dashboard/researcher/billing" className="block w-full py-2 bg-indigo-600 hover:bg-indigo-700 text-white text-xs font-bold rounded-lg text-center transition-colors">
-                            Upgrade Now
-                        </Link>
-                    )}
+        {/* PLAN STATUS WIDGET */}
+        <div className="px-4 mb-4">
+            <div className={`p-4 rounded-2xl border ${tier === 'pro' ? 'bg-slate-900 text-white border-slate-800' : 'bg-white border-slate-200'}`}>
+                <div className="flex items-center justify-between mb-2">
+                    <span className="text-[9px] font-black uppercase opacity-60 tracking-widest">Current Plan</span>
+                    {tier === 'pro' && <Crown className="h-3 w-3 text-amber-400 fill-amber-400" />}
                 </div>
+                <div className="flex items-center gap-2 mb-3">
+                    <div className={`text-sm font-black ${tier === 'pro' ? 'text-white' : 'text-slate-900'}`}>
+                        {tier === 'pro' ? 'Pro Institution' : 'Starter Site'}
+                    </div>
+                </div>
+                {/* Only OAM can upgrade */}
+                {tier === 'free' && isOAM && (
+                    <Link href="/dashboard/researcher/organization-settings?tab=billing" className="block w-full py-2 bg-indigo-600 hover:bg-indigo-700 text-white text-[10px] font-black rounded-lg text-center transition-colors uppercase tracking-widest">
+                        Upgrade
+                    </Link>
+                )}
             </div>
-        )}
+        </div>
+
         <div className="p-4 border-t border-slate-100">
-          <button onClick={handleLogout} className="flex items-center gap-3 px-4 py-3 text-slate-500 hover:text-red-600 font-medium text-sm w-full transition-colors">
-            <LogOut className="h-5 w-5" /> Sign Out
+          <button onClick={handleLogout} className="flex items-center gap-3 px-4 py-2 text-slate-400 hover:text-rose-600 font-bold text-xs w-full transition-colors uppercase tracking-widest">
+            <LogOut className="h-4 w-4" /> Sign Out
           </button>
         </div>
       </aside>
 
+      {/* MAIN CONTENT AREA */}
       <main className="flex-1 flex flex-col min-w-0 overflow-auto relative bg-slate-50">
+        
+        {/* GATEKEEPER OVERLAY (For Pro Features) */}
         {tier === 'free' && gateConfig.isRestricted && (
             <div className="absolute inset-0 z-[100] flex items-center justify-center p-8">
                 <div className="absolute inset-0 bg-slate-50/60 backdrop-blur-md transition-all duration-500" />
@@ -161,17 +166,23 @@ function LayoutContent({ children, profile, isOwner, userRole, tier, loading, ha
                     <p className="text-slate-500 text-sm mb-8 leading-relaxed font-medium">
                         {gateConfig.description}
                     </p>
-                    <Link 
-                        href="/dashboard/researcher/billing"
-                        className="block w-full py-4 bg-indigo-600 text-white rounded-2xl font-black text-xs uppercase tracking-widest hover:bg-indigo-700 transition-all shadow-lg shadow-indigo-100"
-                    >
-                        View Upgrade Options
-                    </Link>
+                    {isOAM ? (
+                        <Link 
+                            href="/dashboard/researcher/organization-settings?tab=billing"
+                            className="block w-full py-4 bg-indigo-600 text-white rounded-2xl font-black text-xs uppercase tracking-widest hover:bg-indigo-700 transition-all shadow-lg shadow-indigo-100"
+                        >
+                            View Upgrade Options
+                        </Link>
+                    ) : (
+                        <p className="text-[10px] font-bold text-amber-600 uppercase tracking-widest bg-amber-50 p-3 rounded-xl border border-amber-100">
+                            Contact your Account Manager to upgrade
+                        </p>
+                    )}
                 </div>
             </div>
         )}
 
-        <div className="p-8 h-full">
+        <div className="h-full">
             {children}
         </div>
       </main>
@@ -179,40 +190,87 @@ function LayoutContent({ children, profile, isOwner, userRole, tier, loading, ha
   );
 }
 
-// --- MAIN WRAPPER ---
+// --- MAIN WRAPPER (DATA FETCHING) ---
 export default function ResearcherLayout({ children }: { children: React.ReactNode }) {
   const router = useRouter();
+  const pathname = usePathname(); 
   const [profile, setProfile] = useState<any>(null);
-  const [isOwner, setIsOwner] = useState(false);
+  const [organization, setOrganization] = useState<any>(null);
   const [userRole, setUserRole] = useState<string>(""); 
   const [tier, setTier] = useState<'free' | 'pro'>('free'); 
   const [loading, setLoading] = useState(true);
 
   const fetchContext = useCallback(async () => {
-    const { data: { user } } = await supabase.auth.getUser();
-    if (!user) { router.push('/'); return; }
+    try {
+        const { data: { user } } = await supabase.auth.getUser();
+        if (!user) { 
+          router.push('/'); 
+          return; 
+        }
 
-    const [profileResponse, memberResponse] = await Promise.all([
-      supabase.from('researcher_profiles').select('*').eq('user_id', user.id).maybeSingle(),
-      supabase.from('team_members').select(`*, researcher_profiles(*)`).eq('user_id', user.id).maybeSingle()
-    ]);
+        // 1. SEQUENTIAL FETCH: Get Profile & Team Status
+        let [profileRes, teamRes] = await Promise.all([
+            supabase.from('researcher_profiles').select('*').eq('user_id', user.id).maybeSingle(),
+            supabase.from('team_members').select('*').eq('user_id', user.id).maybeSingle()
+        ]);
 
-    const activeProfile = profileResponse.data || memberResponse.data?.researcher_profiles;
-    
-    if (!activeProfile) { 
-        router.push('/'); 
-        return; 
+        // Merge logic: Team record is the source of truth for Role/OAM status
+        let activeProfile = teamRes.data ? { ...teamRes.data, ...profileRes.data } : profileRes.data;
+
+        // RETRY LOGIC (For fresh signups where DB might lag slightly)
+        if (!activeProfile) {
+            await new Promise(resolve => setTimeout(resolve, 1500));
+            const [retryProfile, retryTeam] = await Promise.all([
+                supabase.from('researcher_profiles').select('*').eq('user_id', user.id).maybeSingle(),
+                supabase.from('team_members').select('*').eq('user_id', user.id).maybeSingle()
+            ]);
+            activeProfile = retryTeam.data ? { ...retryTeam.data, ...retryProfile.data } : retryProfile.data;
+        }
+
+        if (activeProfile) {
+            // 2. Fetch Organization Details
+            if (activeProfile.organization_id) {
+                const { data: orgData } = await supabase
+                    .from('organizations')
+                    .select('*')
+                    .eq('id', activeProfile.organization_id)
+                    .maybeSingle();
+                
+                activeProfile.organizations = orgData;
+            }
+
+            setProfile(activeProfile);
+            setOrganization(activeProfile.organizations || null);
+            
+            // --- VERIFICATION GATEKEEPING ---
+            // If Org exists but is NOT verified -> Force to Pending Page
+            if (activeProfile.organizations && activeProfile.organizations.is_verified === false) {
+                if (pathname !== '/dashboard/researcher/pending') {
+                    router.push('/dashboard/researcher/pending');
+                }
+            }
+            // If Org IS verified but user is stuck on Pending Page -> Release to Dashboard
+            else if (activeProfile.organizations && activeProfile.organizations.is_verified === true) {
+                if (pathname === '/dashboard/researcher/pending') {
+                    router.push('/dashboard/researcher');
+                }
+            }
+
+            // Role & Tier Setup
+            setUserRole(activeProfile.role || 'Member');
+            const rawTier = activeProfile.organizations?.billing_tier?.toString() || 'free';
+            setTier(rawTier.toLowerCase().includes('pro') ? 'pro' : 'free');
+            
+            setLoading(false);
+            return;
+        }
+
+        router.push('/');
+    } catch (err) {
+        console.error("Layout Context Error:", err);
+        router.push('/');
     }
-
-    setProfile(activeProfile);
-    setIsOwner(!!profileResponse.data);
-    setUserRole(profileResponse.data ? "owner" : (memberResponse.data?.role || "coordinator"));
-    
-    const dbTier = activeProfile.tier?.toString().trim().toLowerCase();
-    setTier(dbTier === 'pro' ? 'pro' : 'free');
-    
-    setLoading(false);
-  }, [router]);
+  }, [router, pathname]); 
 
   useEffect(() => {
     fetchContext();
@@ -224,10 +282,10 @@ export default function ResearcherLayout({ children }: { children: React.ReactNo
   };
 
   return (
-    <Suspense fallback={<div className="min-h-screen flex items-center justify-center"><Loader2 className="h-8 w-8 animate-spin text-slate-400" /></div>}>
+    <Suspense fallback={<div className="min-h-screen flex items-center justify-center bg-white"><Loader2 className="h-8 w-8 animate-spin text-indigo-600" /></div>}>
         <LayoutContent 
             profile={profile} 
-            isOwner={isOwner} 
+            organization={organization}
             userRole={userRole} 
             tier={tier} 
             loading={loading} 

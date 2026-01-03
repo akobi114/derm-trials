@@ -4,6 +4,7 @@ import { useEffect, useState } from "react";
 import { supabase } from "@/lib/supabase";
 import TrialCardWide from "./TrialCardWide"; 
 import { MapPin, Filter } from "lucide-react"; 
+import { calculateDistance } from "@/lib/locationService"; // Ensure this helper is imported
 
 // --- STATE DICTIONARY (Abbr -> Full Name) ---
 const STATE_MAP: Record<string, string> = {
@@ -28,6 +29,9 @@ interface TrialLocation {
   status: string;
   country: string;
   facility: string;
+  lat?: string; 
+  long?: string; 
+  geoPoint?: { lat: number; lon: number };
 }
 
 export interface Trial {
@@ -41,6 +45,14 @@ export interface Trial {
   tags: string[];
   simple_title?: string;
   sponsor?: string;
+  phase?: string; 
+  gender?: string; 
+  // --- NEW FIELDS FOR SITE-CENTRIC MODEL ---
+  specificLocation?: TrialLocation;
+  claimingClinic?: string | null;
+  isBranded?: boolean;
+  displaySummary?: string;
+  dist_miles?: number; // Added to capture DB-calculated distance
 }
 
 interface TrialResultsListProps {
@@ -55,6 +67,7 @@ export default function TrialResultsList({ searchQuery, zipCode, distance = 100 
   
   const [userState, setUserState] = useState<string | null>(null);
   const [searchLabel, setSearchLabel] = useState<string>("");
+  const [userCoords, setUserCoords] = useState<{lat: number, lon: number} | null>(null);
 
   useEffect(() => {
     async function fetchTrials() {
@@ -73,26 +86,34 @@ export default function TrialResultsList({ searchQuery, zipCode, distance = 100 
             const stateAbbr = geoData.places[0]['state abbreviation']; 
             const cityName = geoData.places[0]['place name']; 
 
+            setUserCoords({ lat, lon });
             setUserState(stateAbbr);
             setSearchLabel(`${cityName}, ${stateAbbr}`);
 
-            const { data, error } = await supabase.rpc('get_trials_nearby', {
-              lat: lat,
-              long: lon,
-              miles: distance,
+            // UPDATED: Use the site-centric 'search_trial_locations' RPC
+            const { data, error } = await supabase.rpc('search_trial_locations', {
+              user_lat: lat,
+              user_lon: lon,
+              radius_miles: distance,
               search_term: searchQuery.trim() || null
             });
 
-            if (!error && data) setTrials(data as any[]);
+            if (!error && data) {
+                await processLocationExpansion(data as any[], lat, lon);
+            } else if (error) {
+                console.error("RPC Error:", error.message);
+            }
           } else {
             setUserState(null);
             setSearchLabel("");
+            setUserCoords(null);
             await runTextSearch();
           }
 
         } else {
           setUserState(null);
           setSearchLabel("");
+          setUserCoords(null);
           await runTextSearch();
         }
 
@@ -103,21 +124,69 @@ export default function TrialResultsList({ searchQuery, zipCode, distance = 100 
       }
     }
 
-    async function runTextSearch() {
-        const { data: allTrials } = await supabase.from('trials').select('*');
-        if (!allTrials) return;
+    // --- HELPER: LOCATION-BASED ROW EXPANSION ENGINE (Surgically Updated for DB-driven mapping) ---
+    async function processLocationExpansion(rawSites: any[], lat?: number, lon?: number) {
+        // 1. Fetch ALL approved claims to cross-reference clinic names
+        const { data: allClaims } = await supabase
+            .from('claimed_trials')
+            .select('*, organizations(name)')
+            .eq('status', 'approved');
 
-        if (searchQuery) {
-            const lowerQuery = searchQuery.toLowerCase();
-            const filtered = allTrials.filter((trial) => {
-                const titleMatch = trial.title.toLowerCase().includes(lowerQuery);
-                const conditionMatch = trial.condition.toLowerCase().includes(lowerQuery);
-                const tagMatch = trial.tags?.some((tag: string) => tag.toLowerCase().includes(lowerQuery));
-                return titleMatch || conditionMatch || tagMatch;
-            });
-            setTrials(filtered as any[]);
-        } else {
-            setTrials(allTrials as any[]);
+        // 2. Map the DB results into the Trial interface
+        // This processes the expanded rows provided by the database function
+        const finalSites = rawSites.map((item: any, idx: number) => {
+            const siteStatus = (item.site_status || "").toLowerCase();
+            
+            // --- WITHDRAWN SUPPRESSION ---
+            if (siteStatus === 'withdrawn' || siteStatus === 'suspended' || siteStatus === 'terminated') {
+                return null;
+            }
+
+            // 3. Cross-reference for Branded Claims
+            // Matches against the facility and city to identify if a specific site is "Claimed"
+            const claim = allClaims?.find(c => 
+                c.nct_id === item.nct_id && 
+                c.site_location?.city?.toLowerCase().trim() === (item.city || "").toLowerCase().trim() &&
+                c.site_location?.facility?.toLowerCase().trim() === (item.facility_name || "").toLowerCase().trim()
+            );
+
+            // 4. Construct the Site-Specific Trial Object
+            return {
+                ...item,
+                // UPDATED: Use item.location_id (the stable DB primary key) instead of a synthetic string
+                // This ensures the unique location is locked when navigating to the trial page
+                id: item.location_id || `${item.nct_id}-${item.facility_name || item.city}-${idx}`, 
+                specificLocation: {
+                    city: item.city,
+                    state: item.state,
+                    facility: item.facility_name,
+                    zip: item.zip_code,
+                    status: item.site_status,
+                    geoPoint: { lat: item.lat, lon: item.lon }
+                },
+                claimingClinic: claim?.organizations?.name || null,
+                isBranded: !!claim,
+                // Use the distance provided directly by the database logic
+                dist_miles: item.dist_miles,
+                displaySummary: claim?.custom_brief_summary || item.ai_snippet || item.simple_summary
+            };
+        }).filter(Boolean); // Remove suppressed sites
+
+        setTrials(finalSites);
+    }
+
+    async function runTextSearch() {
+        // Fallback for searches without a ZIP code
+        // We still use the RPC but pass null coordinates to get a text-only match
+        const { data, error } = await supabase.rpc('search_trial_locations', {
+          user_lat: null,
+          user_lon: null,
+          radius_miles: null,
+          search_term: searchQuery.trim() || null
+        });
+
+        if (!error && data) {
+            await processLocationExpansion(data as any[]);
         }
     }
 
@@ -154,7 +223,7 @@ export default function TrialResultsList({ searchQuery, zipCode, distance = 100 
             
             <div className="flex items-center gap-2 text-sm font-bold text-slate-600 bg-white px-4 py-2 rounded-lg border border-slate-200 shadow-sm whitespace-nowrap">
               <Filter className="h-4 w-4" />
-              {trials.length} {trials.length === 1 ? 'Study' : 'Studies'} Found
+              {trials.length} {trials.length === 1 ? 'Site' : 'Sites'} Found
             </div>
         </div>
         
@@ -162,60 +231,25 @@ export default function TrialResultsList({ searchQuery, zipCode, distance = 100 
         <div className="space-y-4">
           {trials.length > 0 ? (
             trials.map((trial) => {
-              
-              // --- SMART "MULTI-LOCATION" AGGREGATOR ---
-              const displayTrial = { ...trial };
-              
-              const sitesArray = (Array.isArray(trial.locations) ? trial.locations : 
-                                  Array.isArray(trial.location) ? trial.location : []) as TrialLocation[];
-
-              if (userState && sitesArray.length > 0) {
-                  const stateAbbr = userState.toUpperCase();
-                  const stateFull = STATE_MAP[stateAbbr];
-
-                  // 1. Find ALL matching sites in this state
-                  const matches = sitesArray.filter(site => {
-                      const s = (site.state || "").trim();
-                      return s.toLowerCase() === stateFull?.toLowerCase() || 
-                             s.toUpperCase() === stateAbbr;
-                  });
-
-                  if (matches.length > 0) {
-                      // 2. Get unique city names to avoid "Phoenix, Phoenix"
-                      const uniqueCities = Array.from(new Set(matches.map(m => m.city.trim())));
-                      const count = uniqueCities.length;
-                      
-                      // 3. Format the display string based on how many locations exist
-                      if (count === 1) {
-                        displayTrial.location = `${uniqueCities[0]}, ${matches[0].state}`;
-                      } else if (count === 2) {
-                        displayTrial.location = `${uniqueCities[0]} & ${uniqueCities[1]}, ${matches[0].state}`;
-                      } else {
-                        // 3 or more: "Phoenix, Scottsdale (+2 others)"
-                        displayTrial.location = `${uniqueCities[0]}, ${uniqueCities[1]} (+${count - 2} others)`;
-                      }
-                      
-                  } else {
-                      displayTrial.location = ""; 
-                  }
-              } else if (sitesArray.length > 0) {
-                  // Fallback for non-zip searches
-                  displayTrial.location = `${sitesArray[0].city}, ${sitesArray[0].state}`;
-              } else {
-                  displayTrial.location = ""; 
-              }
-
-              return <TrialCardWide key={trial.id} trial={displayTrial} />;
+              // The card now receives specific coordinates to show accurate mileage
+              return (
+                <TrialCardWide 
+                  key={trial.id} 
+                  trial={trial} 
+                  userLat={userCoords?.lat} 
+                  userLon={userCoords?.lon} 
+                />
+              );
             })
           ) : (
             <div className="p-12 text-center bg-white rounded-2xl border border-slate-200 border-dashed">
               <div className="w-16 h-16 bg-slate-50 rounded-full flex items-center justify-center mx-auto mb-4">
                  <MapPin className="h-8 w-8 text-slate-300" />
               </div>
-              <h3 className="text-lg font-bold text-slate-900 mb-2">No matches found nearby</h3>
+              <h3 className="text-lg font-bold text-slate-900 mb-2">No active matches found</h3>
               <p className="text-slate-500 max-w-md mx-auto">
-                We couldn't find any "{searchQuery}" trials within {distance} miles of {zipCode}. 
-                <br /><span className="text-xs mt-2 block">Try increasing the distance or searching a different condition.</span>
+                We couldn't find any recruiting "{searchQuery}" trials within {distance} miles of {zipCode}. 
+                <br /><span className="text-xs mt-2 block">Inactive or withdrawn locations are hidden from search.</span>
               </p>
             </div>
           )}

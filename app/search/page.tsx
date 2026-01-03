@@ -124,11 +124,12 @@ function SearchResultsContent() {
           }
         }
 
+        // UPDATED: Parameter names now match the prefixed p_ names in SQL
         const { data, error } = await supabase.rpc('get_trials_nearby', {
-          lat: lat,
-          long: lon,
-          miles: radiusParam,
-          search_term: queryParam.trim() || null
+          p_lat: lat,
+          p_long: lon,
+          p_miles: radiusParam,
+          p_query: queryParam.trim() || null
         });
         
         if (!error && data) {
@@ -165,8 +166,12 @@ function SearchResultsContent() {
         }
         
         if ((!data || data.length === 0) && lat && lon) {
+          // UPDATED: Parameter names now match the prefixed p_ names in SQL
           const { data: recs } = await supabase.rpc('get_trials_nearby', { 
-            lat, long: lon, miles: radiusParam, search_term: null 
+            p_lat: lat, 
+            p_long: lon, 
+            p_miles: radiusParam, 
+            p_query: null 
           });
           setRecommendations(recs?.slice(0, 4) || []);
         }
@@ -362,7 +367,7 @@ function SearchResultsContent() {
               <div className="flex flex-col gap-4 animate-in fade-in slide-in-from-bottom-4 duration-500">
                 {results.map((trial) => (
                   <TrialCardWide 
-                    key={trial.id} 
+                    key={trial.location_id} 
                     trial={trial} 
                     userLat={userCoords?.lat} 
                     userLon={userCoords?.lon} 
@@ -434,7 +439,7 @@ function SearchResultsContent() {
                 </div>
                 <div className="flex flex-col gap-4 opacity-75">
                   {recommendations.map((trial) => (
-                    <TrialCardWide key={trial.id} trial={trial} userLat={userCoords?.lat} userLon={userCoords?.lon} />
+                    <TrialCardWide key={trial.location_id} trial={trial} userLat={userCoords?.lat} userLon={userCoords?.lon} />
                   ))}
                 </div>
               </div>

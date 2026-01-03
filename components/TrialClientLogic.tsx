@@ -1,7 +1,7 @@
 "use client";
 
 import { useState, useMemo, useEffect } from 'react';
-import { useRouter } from 'next/navigation'; 
+import { useRouter, useSearchParams } from 'next/navigation';
 import { 
   ClipboardCheck, X, ShieldCheck, ArrowRight, ScanSearch, 
   PartyPopper, Check, Lock, BookOpen, ChevronDown, FileText, 
@@ -83,15 +83,21 @@ function SmartLocationPicker({ locations, userZip, selected, onSelect }: any) {
       
       <div className="max-h-60 overflow-y-auto border border-slate-200 rounded-xl bg-white divide-y divide-slate-100">
         {sortedLocs.map((loc: any, idx: number) => {
-          const isSelected = selected?.facility === loc.facility;
-          const isNearby = loc._distance !== undefined && loc._distance < 100;
+          // 1. UPDATED: Match by unique ID instead of facility name string
+          const isSelected = selected?.id === loc.id;
+          const isDisabled = !loc.isSelectable;
+
+          // 2. FIX: Define isNearby so the component doesn't crash
+          // We consider it "nearby" if a valid distance was calculated (less than our 9999 default)
+          const isNearby = loc._distance && loc._distance < 9999;
 
           return (
             <div 
-              key={idx}
-              onClick={() => onSelect(loc)}
+              key={loc.id || idx}
+              onClick={() => !isDisabled && onSelect(loc)}
               className={`
-                relative p-4 cursor-pointer transition-all hover:bg-slate-50
+                relative p-4 transition-all
+                ${isDisabled ? 'opacity-40 cursor-not-allowed bg-slate-50' : 'cursor-pointer hover:bg-slate-50'}
                 ${isSelected ? 'bg-indigo-50/60' : ''}
               `}
             >
@@ -114,7 +120,7 @@ function SmartLocationPicker({ locations, userZip, selected, onSelect }: any) {
                       </span>
                     )}
                   </div>
-                  <p className="text-xs text-slate-500 truncate">{loc.facility}</p>
+                  {/* FACILITY NAME REMOVED not shown*/}
                 </div>
               </div>
             </div>
@@ -127,7 +133,29 @@ function SmartLocationPicker({ locations, userZip, selected, onSelect }: any) {
 
 // --- MAIN EXPORT ---
 export default function TrialClientLogic({ trial, sidebarMode = false, userZip }: { trial: any, sidebarMode?: boolean, userZip?: string }) {
-  const router = useRouter(); 
+  const router = useRouter();
+  const searchParams = useSearchParams(); // Needed to read ?facility= from URL 
+
+    const safeParse = (data: any) => {
+    if (!data) return null;
+    if (Array.isArray(data) || typeof data === 'object') return data;
+    try { return JSON.parse(data); } catch (e) { return null; }
+  };
+
+  const interventions = useMemo(() => safeParse(trial.interventions) || [], [trial.interventions]);
+  const primaryOutcomes = useMemo(() => safeParse(trial.primary_outcomes) || [], [trial.primary_outcomes]);
+  const secondaryOutcomes = useMemo(() => safeParse(trial.secondary_outcomes) || [], [trial.secondary_outcomes]);
+  const studyDesign = useMemo(() => safeParse(trial.study_design) || {}, [trial.study_design]);
+  const screenerQuestions = useMemo(() => safeParse(trial.screener_questions) || [], [trial.screener_questions]);
+  const locationsList = useMemo(() => {
+    const raw = safeParse(trial.locations) || (trial.locations ? trial.locations : []);
+    if (!Array.isArray(raw)) return [];
+    return raw.map((loc: any) => ({
+        ...loc,
+        // Helper to identify active sites
+        isSelectable: (loc.status || "").toLowerCase() === 'recruiting' || (loc.status || "").toLowerCase() === 'not_yet_recruiting'
+    }));
+  }, [trial.locations]);
 
   // --- STATE ---
   const [currentUser, setCurrentUser] = useState<any>(null); 
@@ -152,38 +180,48 @@ export default function TrialClientLogic({ trial, sidebarMode = false, userZip }
   const [showPassword, setShowPassword] = useState(false);
   const [submittingLead, setSubmittingLead] = useState(false);
 
-  useEffect(() => {
-    const checkUserAndLead = async () => {
-        const { data: { user } } = await supabase.auth.getUser();
-        setCurrentUser(user);
+useEffect(() => {
+    const initializeApplication = async () => {
+      // 1. Get current authenticated user
+      const { data: { user } } = await supabase.auth.getUser();
+      setCurrentUser(user);
 
-        // --- NEW: Check if this user already applied to this trial ---
-        if (user && trial.nct_id) {
-            const { data: lead } = await supabase
-                .from('leads')
-                .select('status, site_status')
-                .eq('user_id', user.id)
-                .eq('trial_id', trial.nct_id)
-                .maybeSingle();
-            
-            if (lead) setExistingLead(lead);
+      // 2. CHECK PRIOR APPLICATION
+      if (user && trial.nct_id) {
+        const { data: lead } = await supabase
+          .from('leads')
+          .select('status, site_status')
+          .eq('user_id', user.id)
+          .eq('trial_id', trial.nct_id)
+          .maybeSingle();
+        
+        if (lead) setExistingLead(lead);
+      }
+
+      // 3. AUTO-SELECT SITE: Matches ?location= ID parameter from URL
+      const locationId = searchParams.get('location');
+      
+      if (locationId && locationsList.length > 0) {
+        // FIX: We must convert both to Strings to avoid UUID mismatch issues
+        const matched = locationsList.find((l: any) => 
+          String(l.id || l.location_id).toLowerCase() === String(locationId).toLowerCase()
+        );
+
+        if (matched) {
+          setSelectedLocation(matched);
+          console.log("📍 Location Lock Success:", matched.city);
+        } else {
+          console.warn("⚠️ URL location ID provided but no match found in trial locations list.");
+          setSelectedLocation(null);
         }
+      } else {
+        // Ensure state is cleared if no location is in the URL
+        setSelectedLocation(null);
+      }
     };
-    checkUserAndLead();
-  }, [trial.nct_id]);
 
-  const safeParse = (data: any) => {
-    if (!data) return null;
-    if (Array.isArray(data) || typeof data === 'object') return data;
-    try { return JSON.parse(data); } catch (e) { return null; }
-  };
-
-  const interventions = useMemo(() => safeParse(trial.interventions) || [], [trial.interventions]);
-  const primaryOutcomes = useMemo(() => safeParse(trial.primary_outcomes) || [], [trial.primary_outcomes]);
-  const secondaryOutcomes = useMemo(() => safeParse(trial.secondary_outcomes) || [], [trial.secondary_outcomes]);
-  const studyDesign = useMemo(() => safeParse(trial.study_design) || {}, [trial.study_design]);
-  const screenerQuestions = useMemo(() => safeParse(trial.screener_questions) || [], [trial.screener_questions]);
-  const locationsList = useMemo(() => safeParse(trial.locations) || (trial.locations ? trial.locations : []), [trial.locations]);
+    initializeApplication();
+  }, [trial.nct_id, searchParams, locationsList]);
 
   const openScreener = () => {
     setScreenerStep('intro');
@@ -226,7 +264,7 @@ export default function TrialClientLogic({ trial, sidebarMode = false, userZip }
     }
   };
 
-  const handleQuizCheck = async () => {
+const handleQuizCheck = async () => {
     setScreenerStep('analyzing');
     await new Promise(resolve => setTimeout(resolve, 2000));
 
@@ -247,10 +285,26 @@ export default function TrialClientLogic({ trial, sidebarMode = false, userZip }
        confetti({ particleCount: 100, spread: 70, origin: { y: 0.6 }, zIndex: 9999 });
     }
 
+    // --- ROBUST ROUTING LOGIC ---
+    const urlLocationId = searchParams.get('location');
+    
+    // FORCE FIND: Look for the location using string normalization to prevent UUID mismatches
+    let activeLocation = selectedLocation;
+    if (!activeLocation && urlLocationId) {
+      activeLocation = locationsList.find((l: any) => 
+        String(l.id).toLowerCase() === String(urlLocationId).toLowerCase()
+      );
+    }
+
     if (currentUser) {
-        if (locationsList && locationsList.length > 0) {
+        if (activeLocation) {
+            // BYPASS: Pass the specific location to avoid waiting for state updates
+            handleInstantSubmit(newStatus, activeLocation);
+        } 
+        else if (locationsList && locationsList.length > 0) {
             setScreenerStep('location_select');
-        } else {
+        } 
+        else {
             handleInstantSubmit(newStatus);
         }
     } else {
@@ -258,16 +312,17 @@ export default function TrialClientLogic({ trial, sidebarMode = false, userZip }
     }
   };
 
-  const handleInstantSubmit = async (status: string) => {
+const handleInstantSubmit = async (status: string, passedLocation?: any) => {
     setSubmittingLead(true);
     
-    if (locationsList.length > 0 && !selectedLocation) {
+    // Priority: Passed Location > State Location > First available in list
+    const finalLocation = passedLocation || selectedLocation || (locationsList.length > 0 ? locationsList[0] : null);
+
+    if (locationsList.length > 0 && !finalLocation) {
         alert("Please select a preferred location before submitting.");
         setSubmittingLead(false);
         return;
     }
-
-    const finalLocation = selectedLocation || (locationsList.length > 0 ? locationsList[0] : null);
 
     try {
         const { data: profile } = await supabase
@@ -285,6 +340,8 @@ export default function TrialClientLogic({ trial, sidebarMode = false, userZip }
             phone: profile?.phone || '',
             status: status,
             answers: answers,
+            // UPDATED: Precision Site Mapping to link lead to specific clinic UUID
+            location_id: finalLocation?.location_id || finalLocation?.id,
             site_city: finalLocation?.city || 'Unknown',
             site_state: finalLocation?.state || 'Unknown',
             site_facility: finalLocation?.facility || '', 
@@ -304,12 +361,13 @@ export default function TrialClientLogic({ trial, sidebarMode = false, userZip }
     }
   };
 
-  const handleLeadSubmit = async (e: React.FormEvent) => {
+const handleLeadSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     setSubmittingLead(true);
 
+    // --- UPDATED VALIDATION: Respects pre-selected facility ---
     if (locationsList && locationsList.length > 0 && !selectedLocation) {
-        alert("Please select a specific location (e.g. Scottsdale or Phoenix) to continue.");
+        alert("Please select your preferred clinical site location to continue.");
         setSubmittingLead(false);
         return; 
     }
@@ -330,10 +388,19 @@ export default function TrialClientLogic({ trial, sidebarMode = false, userZip }
     const fullName = `${leadForm.firstName} ${leadForm.lastName}`.trim();
 
     try {
+        // UPDATED: Sending individual fields in metadata to satisfy the DB Trigger
         const { data: authData, error: authError } = await supabase.auth.signUp({
             email: leadForm.email,
             password: leadForm.password,
-            options: { data: { role: 'candidate', full_name: fullName } }
+            options: { 
+              data: { 
+                role: 'candidate', 
+                full_name: fullName,
+                first_name: leadForm.firstName,
+                last_name: leadForm.lastName,
+                phone: leadForm.phone 
+              } 
+            }
         });
 
         if (authError) throw authError;
@@ -361,6 +428,8 @@ export default function TrialClientLogic({ trial, sidebarMode = false, userZip }
             phone: leadForm.phone,
             status: leadStatus,
             answers: answers,
+            // UPDATED: Linking the specific site ID to the lead for site-centricity
+            location_id: finalLocation?.location_id || finalLocation?.id,
             site_city: finalLocation?.city || 'Unknown',
             site_state: finalLocation?.state || 'Unknown',
             site_facility: finalLocation?.facility || '',
@@ -441,7 +510,7 @@ export default function TrialClientLogic({ trial, sidebarMode = false, userZip }
              </div>
           </div>
           
-          {/* SCREENER MODAL (Unchanged) */}
+{/* SCREENER MODAL (Surgically Updated for Site-Centricity) */}
           {isModalOpen && (
             <div className="fixed inset-0 z-[110] flex items-center justify-center p-4">
               <div className="absolute inset-0 bg-slate-900/60 backdrop-blur-sm transition-opacity" onClick={closeScreener}></div>
@@ -451,15 +520,36 @@ export default function TrialClientLogic({ trial, sidebarMode = false, userZip }
                   <button onClick={closeScreener} className="p-2 hover:bg-slate-200 rounded-full transition-colors text-slate-400 hover:text-slate-600"><X className="h-5 w-5" /></button>
                 </div>
                 <div className="p-6 overflow-y-auto">
+                  
+                  {/* STEP 01: INTRO */}
                   {screenerStep === 'intro' && (
                     <div className="text-center py-4">
                       <div className="w-16 h-16 bg-indigo-100 text-indigo-600 rounded-full flex items-center justify-center mx-auto mb-4"><ShieldCheck className="h-8 w-8" /></div>
                       <h4 className="text-xl font-bold text-slate-900 mb-2">Check Your Eligibility</h4>
-                      <p className="text-slate-600 mb-8 max-w-xs mx-auto text-sm leading-relaxed">Answer a few questions for <strong>{trial.title}</strong>.</p>
+                      <p className="text-slate-600 mb-6 max-w-xs mx-auto text-sm leading-relaxed">Answer a few questions for <strong>{trial.title}</strong>.</p>
+                      
+                      {/* SITE-CENTRIC CONFIRMATION BADGE - UPDATED TO HIDE FACILITY */}
+                      {selectedLocation && (
+                        <div className="mb-8 p-3 bg-indigo-50 border border-indigo-100 rounded-xl flex items-center gap-3 text-left animate-in fade-in slide-in-from-top-2">
+                            <div className="w-10 h-10 bg-white rounded-lg flex items-center justify-center shadow-sm shrink-0">
+                                <MapPin className="h-5 w-5 text-indigo-600" />
+                            </div>
+                            <div>
+                                <p className="text-[10px] font-black text-indigo-400 uppercase tracking-widest leading-none mb-1">Clinic Site Selected:</p>
+                                <p className="text-xs font-bold text-indigo-900 leading-tight">{selectedLocation.city}, {selectedLocation.state}</p>
+                            </div>
+                        </div>
+                      )}
+
                       {currentUser && <div className="mb-6 p-3 bg-emerald-50 text-emerald-700 text-xs font-bold rounded-lg border border-emerald-100">👋 Welcome back! Applying as {currentUser.email}</div>}
-                      <button onClick={() => setScreenerStep('quiz')} className="w-full bg-indigo-600 text-white py-3.5 rounded-xl font-bold hover:bg-indigo-700 flex items-center justify-center gap-2">Start <ArrowRight className="h-4 w-4" /></button>
+                      
+                      <button onClick={() => setScreenerStep('quiz')} className="w-full bg-indigo-600 text-white py-3.5 rounded-xl font-bold hover:bg-indigo-700 flex items-center justify-center gap-2">
+                        Start <ArrowRight className="h-4 w-4" />
+                      </button>
                     </div>
                   )}
+
+                  {/* STEP 02: QUIZ */}
                   {screenerStep === 'quiz' && (
                     <div className="space-y-6">
                       <div className="space-y-6">
@@ -477,6 +567,8 @@ export default function TrialClientLogic({ trial, sidebarMode = false, userZip }
                       <button onClick={handleQuizCheck} disabled={!screenerQuestions || Object.keys(answers).length < screenerQuestions.length} className="w-full bg-slate-900 text-white py-3.5 rounded-xl font-bold hover:bg-slate-800 transition-colors disabled:opacity-50 mt-4">Check Results</button>
                     </div>
                   )}
+
+                  {/* STEP 03: ANALYZING */}
                   {screenerStep === 'analyzing' && (
                     <div className="py-12 text-center">
                       <div className="relative w-16 h-16 mx-auto mb-6">
@@ -488,7 +580,7 @@ export default function TrialClientLogic({ trial, sidebarMode = false, userZip }
                     </div>
                   )}
                   
-                  {/* --- NEW STEP: LOCATION SELECT FOR LOGGED IN USERS --- */}
+                  {/* STEP 04: LOCATION SELECT (Fallback for logged in users) */}
                   {screenerStep === 'location_select' && (
                     <div className="animate-in slide-in-from-right-4 duration-300">
                       <div className="text-center mb-6">
@@ -514,6 +606,7 @@ export default function TrialClientLogic({ trial, sidebarMode = false, userZip }
                     </div>
                   )}
 
+                  {/* STEP 05: REGISTRATION FORM */}
                   {screenerStep === 'form' && (
                     <div className="animate-in slide-in-from-right-4 duration-300">
                       <div className={`p-5 rounded-xl mb-6 flex items-start gap-4 border shadow-sm ${leadStatus === 'Strong Lead' ? 'bg-emerald-50 border-emerald-100' : 'bg-indigo-50 border-indigo-100'}`}>
@@ -528,21 +621,50 @@ export default function TrialClientLogic({ trial, sidebarMode = false, userZip }
                       
                       <form onSubmit={handleLeadSubmit} className="space-y-4">
                         
-                        {locationsList && locationsList.length > 0 && (
-                             <div className="mb-6 border rounded-xl border-indigo-100 overflow-hidden">
-                                 <div className="bg-indigo-50/50 px-4 py-2 border-b border-indigo-100">
-                                     <label className="text-xs font-bold text-indigo-900 uppercase">
-                                         Select Your Clinic Location <span className="text-red-500">*</span>
-                                     </label>
-                                 </div>
-                                 <SmartLocationPicker 
+                        {/* ROBUST LOCK: Prevents the dual-display issue by checking the URL directly during render */}
+                        {(() => {
+                          const urlLocId = searchParams.get('location');
+                          // Ensure we use string comparison and check both state and URL
+                          const activeLocation = selectedLocation || (urlLocId ? locationsList.find((l: any) => String(l.id).toLowerCase() === String(urlLocId).toLowerCase()) : null);
+
+                          if (activeLocation) {
+                            return (
+                              <div className="mb-6 p-4 bg-indigo-50 border border-indigo-100 rounded-xl flex items-center gap-3 animate-in fade-in">
+                                  <div className="w-10 h-10 bg-white rounded-lg flex items-center justify-center shadow-sm shrink-0">
+                                      <MapPin className="h-5 w-5 text-indigo-600" />
+                                  </div>
+                                  <div>
+                                      <p className="text-[10px] font-black text-indigo-400 uppercase tracking-widest leading-none mb-1">
+                                          Clinic Site Locked:
+                                      </p>
+                                      <p className="text-xs font-bold text-indigo-900 leading-tight">
+                                          {activeLocation.city}, {activeLocation.state}
+                                      </p>
+                                  </div>
+                              </div>
+                            );
+                          }
+
+                          // Fallback: Show picker only if no location is determined
+                          if (locationsList && locationsList.length > 0) {
+                            return (
+                              <div className="mb-6 border rounded-xl border-indigo-100 overflow-hidden">
+                                  <div className="bg-indigo-50/50 px-4 py-2 border-b border-indigo-100">
+                                      <label className="text-xs font-bold text-indigo-900 uppercase">
+                                          Select Your Clinic Location <span className="text-red-500">*</span>
+                                      </label>
+                                  </div>
+                                  <SmartLocationPicker 
                                     locations={locationsList} 
                                     userZip={userZip} 
                                     selected={selectedLocation} 
                                     onSelect={setSelectedLocation}
-                                 />
-                             </div>
-                        )}
+                                  />
+                              </div>
+                            );
+                          }
+                          return null;
+                        })()}
 
                         <div className="grid grid-cols-2 gap-4">
                             <div>
@@ -618,7 +740,7 @@ export default function TrialClientLogic({ trial, sidebarMode = false, userZip }
                                     <Link href="/privacy" target="_blank" className="font-bold text-indigo-600 hover:underline">
                                         Privacy Policy
                                     </Link>
-                                    . I verify that this is my number and consent to receive calls, emails, and SMS text messages from DermTrials and participating research sites regarding this study and future clinical trial opportunities. I understand that these messages may be sent using automated technology, but <strong>I can opt-out at any time</strong>. Message/data rates may apply.
+                                    . I verify that this is my number and consent to receive calls, emails, and SMS text messages from DermTrials regarding this study. I understand that these messages may be sent using automated technology, but <strong>I can opt-out at any time</strong>. Message/data rates may apply.
                                 </div>
                             </label>
                         </div>
@@ -634,6 +756,7 @@ export default function TrialClientLogic({ trial, sidebarMode = false, userZip }
                     </div>
                   )}
 
+{/* STEP 06: SUCCESS */}
                   {screenerStep === 'success' && (
                     <div className="text-center py-8">
                       <div className="w-20 h-20 bg-emerald-100 text-emerald-600 rounded-full flex items-center justify-center mx-auto mb-6"><Check className="h-10 w-10" /></div>

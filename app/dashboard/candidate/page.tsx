@@ -16,6 +16,7 @@ import Link from 'next/link';
 // --- TYPES ---
 type Application = {
     id: string;
+    location_id?: string; // Added for Site-Centric precision
     created_at: string;
     site_status: 'New' | 'Contacted' | 'Scheduled' | 'Enrolled' | 'Not Eligible' | 'Withdrawn' | 'Trial Closed';
     trials: {
@@ -56,14 +57,37 @@ export default function CandidateDashboard() {
   }, [activeTab]);
 
   // --- 1. INITIAL FETCH & SELF-HEALING ---
-  const fetchDashboardData = useCallback(async () => {
+ const fetchDashboardData = useCallback(async () => {
     try {
       const { data: { user } } = await supabase.auth.getUser();
       if (!user) { router.push('/login'); return; }
 
-      // 1. Fetch Profile
-      const { data: profile } = await supabase.from('candidate_profiles').select('*').eq('user_id', user.id).single();
-      if (profile) setCandidate(profile);
+      // --- TASK 1: ROLE-BASED ACCESS CONTROL (MASTER REDIRECT) ---
+      // This ensures Admins and Researchers don't get trapped in the Patient view
+      const role = user.app_metadata?.role;
+      if (role === 'super_admin') {
+          router.push('/admin/system');
+          return;
+      }
+      if (role === 'researcher') {
+          router.push('/dashboard/researcher');
+          return;
+      }
+
+      // 1. Fetch Profile (Using maybeSingle to prevent crashes for new users)
+      const { data: profile } = await supabase.from('candidate_profiles').select('*').eq('user_id', user.id).maybeSingle();
+      
+      // --- TASK 2: METADATA NAME FALLBACK ---
+      // If the candidate hasn't finished their profile table record yet, 
+      // we "heal" the UI by pulling their name from the Auth Token Metadata.
+      if (profile) {
+          setCandidate(profile);
+      } else {
+          setCandidate({
+              first_name: user.user_metadata?.first_name || user.email?.split('@')[0],
+              last_name: user.user_metadata?.last_name || ''
+          });
+      }
 
       // --- SELF-HEALING: Claim Orphaned Leads ---
       if (user.email) {
@@ -271,7 +295,14 @@ export default function CandidateDashboard() {
                                     <div key={app.id} className="bg-white p-6 rounded-2xl border border-slate-200 shadow-sm hover:shadow-md transition-shadow group relative overflow-hidden">
                                         <div className="flex flex-col md:flex-row md:items-center justify-between gap-4 mb-6 relative z-10">
                                             <div>
-                                                <div className="flex items-center gap-2 mb-2"><span className="text-[10px] font-bold text-slate-500 bg-slate-100 px-2 py-0.5 rounded border border-slate-200">{app.trials?.nct_id}</span><span className="text-[10px] font-bold text-indigo-600 bg-indigo-50 px-2 py-0.5 rounded border border-indigo-100">{app.trials?.phase || "Clinical Trial"}</span></div>
+                                                <div className="flex items-center gap-2 mb-2">
+                                                    <span className="text-[10px] font-bold text-slate-500 bg-slate-100 px-2 py-0.5 rounded border border-slate-200">{app.trials?.nct_id}</span>
+                                                    {/* ADDED: SITE LOCATION TAG */}
+                                                    <span className="text-[10px] font-bold text-indigo-600 bg-indigo-50 px-2 py-0.5 rounded border border-indigo-100 flex items-center gap-1">
+                                                        <MapPin className="h-2.5 w-2.5" /> {app.site_city}, {app.site_state}
+                                                    </span>
+                                                    <span className="text-[10px] font-bold text-slate-400 bg-white px-2 py-0.5 rounded border border-slate-100">{app.trials?.phase || "Clinical Trial"}</span>
+                                                </div>
                                                 <h3 className="font-bold text-lg text-slate-900 leading-snug">{app.trials?.title}</h3>
                                             </div>
                                             <span className={`px-4 py-1.5 rounded-full text-xs font-bold uppercase tracking-wide border whitespace-nowrap ${isVisitStage ? 'bg-purple-50 text-purple-700 border-purple-100' : 'bg-emerald-50 text-emerald-700 border-emerald-100'}`}>{app.site_status === 'New' ? 'In Review' : app.site_status}</span>
@@ -333,7 +364,6 @@ export default function CandidateDashboard() {
             </div>
         )}
 
-        {/* ... (Messages and Education tabs same as before) ... */}
         {activeTab === 'messages' && (
             <div className="h-[calc(100vh-5rem)] md:h-screen p-4 md:p-8">
                 <div className="max-w-6xl mx-auto h-full bg-white rounded-2xl shadow-xl border border-slate-200 flex overflow-hidden">
@@ -344,6 +374,10 @@ export default function CandidateDashboard() {
                                 <button key={app.id} onClick={() => setSelectedChatId(app.id)} className={`w-full text-left p-4 border-b border-slate-100 hover:bg-white transition-all duration-200 group ${selectedChatId === app.id ? 'bg-white border-l-4 border-l-indigo-600 shadow-sm' : 'border-l-4 border-l-transparent'}`}>
                                     <div className="flex items-center justify-between mb-1"><span className="text-[10px] font-bold text-slate-500 bg-slate-200 px-1.5 py-0.5 rounded">{app.trials?.nct_id}</span><span className="text-[10px] text-slate-400">{new Date(app.created_at).toLocaleDateString()}</span></div>
                                     <div className={`font-bold text-sm line-clamp-2 leading-snug mb-1 ${selectedChatId === app.id ? 'text-indigo-700' : 'text-slate-900'}`}>{app.trials?.title}</div>
+                                    {/* ADDED: SITE LOCATION TEXT FOR MESSAGES LIST */}
+                                    <div className="text-[10px] font-medium text-slate-400 mb-1 flex items-center gap-1 uppercase tracking-tight">
+                                        <MapPin className="h-2 w-2" /> {app.site_city}, {app.site_state}
+                                    </div>
                                     <div className="flex items-center gap-1.5 text-[11px] font-medium text-slate-500"><div className={`w-2 h-2 rounded-full ${['Not Eligible', 'Withdrawn'].includes(app.site_status) ? 'bg-red-400' : app.site_status === 'New' ? 'bg-emerald-500' : 'bg-purple-500'}`}></div>{app.site_status === 'New' ? 'Screening In Progress' : app.site_status}</div>
                                     {/* BADGE ON LIST ITEM */}
                                     {app.unread_count ? <div className="mt-1 flex justify-end"><span className="bg-red-600 text-white px-2 py-0.5 rounded-full text-[10px] font-bold">{app.unread_count} New</span></div> : null}

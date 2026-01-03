@@ -4,7 +4,7 @@ import React, { useEffect, useState, useMemo } from 'react';
 import { useParams, useSearchParams, useRouter } from 'next/navigation';
 import { supabase } from '@/lib/supabase';
 import { 
-  Loader2, CheckCircle2, ChevronRight, ArrowLeft, ArrowRight, // <--- Fixed Import
+  Loader2, CheckCircle2, ChevronRight, ArrowLeft, ArrowRight,
   ShieldCheck, Info, UserPlus, Lock, AlertCircle, 
   MapPin, Navigation, Mail, Phone, User, Eye, EyeOff, Check, Activity,
   BookOpen, FlaskConical, Syringe, Target, Clock, ClipboardCheck, Share2
@@ -83,6 +83,7 @@ export default function ExpressScreener() {
   const router = useRouter();
   const claimId = searchParams.get('claim_id');
   const userZip = searchParams.get('ref_zip');
+  const facilityParam = searchParams.get('facility'); // <--- NEW: Grab facility from URL
 
   const [isMobile, setIsMobile] = useState<boolean | null>(null);
   const [loading, setLoading] = useState(true);
@@ -131,6 +132,21 @@ export default function ExpressScreener() {
   const questions = useMemo(() => safeParse(trial?.screener_questions), [trial]);
   const locationsList = useMemo(() => safeParse(trial?.locations), [trial]);
 
+  // --- NEW: AUTO-SELECT LOCATION FROM URL PARAM ---
+  useEffect(() => {
+    if (facilityParam && locationsList.length > 0) {
+      const decodedFacility = decodeURIComponent(facilityParam).toLowerCase().trim();
+      const matched = locationsList.find((l: any) => 
+        (l.facility || "").toLowerCase().trim() === decodedFacility ||
+        (l.city || "").toLowerCase().trim() === decodedFacility
+      );
+      if (matched) {
+        setSelectedLocation(matched);
+        console.log("📍 Express Screener locked to site:", matched.facility);
+      }
+    }
+  }, [facilityParam, locationsList]);
+
   const handleAnswer = (val: string) => {
     setAnswers({ ...answers, [currentQIndex]: val });
     if (currentQIndex < questions.length - 1) {
@@ -154,8 +170,14 @@ export default function ExpressScreener() {
     setLeadStatus(isMatch ? 'Strong Lead' : 'Unlikely - Review Needed');
     if (isMatch) confetti({ particleCount: 100, spread: 70, origin: { y: 0.6 } });
     
-    if (locationsList.length > 0) setStep('location');
-    else setStep('signup');
+    // --- UPDATED BRANCHING: SKIP LOCATION PICKER IF PRE-SELECTED ---
+    if (selectedLocation) {
+        setStep('signup');
+    } else if (locationsList.length > 0) {
+        setStep('location');
+    } else {
+        setStep('signup');
+    }
   };
 
   const handleFinalSubmit = async (e: React.FormEvent) => {
@@ -240,6 +262,20 @@ export default function ExpressScreener() {
                  {step === 'consent' && (
                     <div className="bg-white rounded-2xl shadow-lg border border-slate-200 p-6">
                        <h3 className="text-xl font-black mb-4 text-slate-900">See if you qualify.</h3>
+                       
+                       {/* NEW: SITE CONTEXT BADGE */}
+                       {selectedLocation && (
+                        <div className="mb-6 p-3 bg-indigo-50 border border-indigo-100 rounded-xl flex items-center gap-3 text-left animate-in fade-in slide-in-from-top-2">
+                            <div className="w-10 h-10 bg-white rounded-lg flex items-center justify-center shadow-sm shrink-0">
+                                <MapPin className="h-5 w-5 text-indigo-600" />
+                            </div>
+                            <div>
+                                <p className="text-[10px] font-black text-indigo-400 uppercase tracking-widest leading-none mb-1">Applying to Site:</p>
+                                <p className="text-xs font-bold text-indigo-900 leading-tight">{selectedLocation.facility}</p>
+                            </div>
+                        </div>
+                       )}
+
                        <div className="space-y-3 mb-6">
                           <div className="flex gap-3 text-sm text-slate-600"><Lock className="h-5 w-5 text-indigo-600 shrink-0" /> Secure & Encrypted</div>
                           <div className="flex gap-3 text-sm text-slate-600"><Info className="h-5 w-5 text-indigo-600 shrink-0" /> Voluntary & Private</div>
@@ -282,6 +318,14 @@ export default function ExpressScreener() {
                        ) : (
                           <form onSubmit={handleFinalSubmit} className="space-y-3">
                              <div className="bg-emerald-50 text-emerald-800 p-3 rounded-lg text-sm font-bold flex items-center gap-2 mb-4"><CheckCircle2 className="h-4 w-4" /> You Match! Create Portal:</div>
+                             
+                             {/* Only show picker fallback if no location pre-selected */}
+                             {!selectedLocation && (
+                                <div className="mb-4">
+                                   <SmartLocationPicker locations={locationsList} userZip={userZip} selected={selectedLocation} onSelect={setSelectedLocation} />
+                                </div>
+                             )}
+
                              <div className="grid grid-cols-2 gap-2">
                                 <input required placeholder="First" className="p-3 bg-slate-50 border rounded-lg text-sm" value={leadForm.firstName} onChange={e => setLeadForm({...leadForm, firstName: e.target.value})} />
                                 <input required placeholder="Last" className="p-3 bg-slate-50 border rounded-lg text-sm" value={leadForm.lastName} onChange={e => setLeadForm({...leadForm, lastName: e.target.value})} />
@@ -356,9 +400,22 @@ export default function ExpressScreener() {
               <span className="text-indigo-600">eligibility.</span>
             </h1>
 
-            <p className="text-[17px] text-slate-500 font-medium leading-relaxed max-w-[90%]">
+            <p className="text-[17px] text-slate-500 font-medium leading-relaxed max-w-[90%] mb-8">
               Answer a few quick questions to see if you qualify for this dermatology study.
             </p>
+
+            {/* NEW: MOBILE SITE CONTEXT BADGE */}
+            {selectedLocation && (
+              <div className="mb-8 p-4 bg-indigo-50 border border-indigo-100 rounded-[1.25rem] flex items-center gap-4 text-left animate-in fade-in slide-in-from-top-2">
+                  <div className="w-10 h-10 bg-white rounded-xl flex items-center justify-center shadow-sm shrink-0">
+                      <MapPin className="h-5 w-5 text-indigo-600" />
+                  </div>
+                  <div>
+                      <p className="text-[10px] font-black text-indigo-400 uppercase tracking-widest leading-none mb-1">Applying to Site:</p>
+                      <p className="text-sm font-bold text-indigo-900 leading-tight">{selectedLocation.facility}</p>
+                  </div>
+              </div>
+            )}
 
             <div className="flex-1" />
 
@@ -383,7 +440,6 @@ export default function ExpressScreener() {
           </div>
         )}
 
-        {/* MOBILE STEPS (Quiz, Loc, Signup) - same logic but distinct mobile container styles */}
         {step === 'quiz' && (
           <div className="animate-in fade-in mt-10">
             <div className="mb-10">
@@ -416,6 +472,14 @@ export default function ExpressScreener() {
                 <h2 className="text-2xl font-black">Great news! You match.</h2>
                 <p className="text-slate-500 font-medium">Create your portal to finish your application.</p>
             </div>
+
+            {/* Mobile Location Picker Fallback */}
+            {!selectedLocation && locationsList.length > 0 && (
+                <div className="mb-4">
+                   <SmartLocationPicker locations={locationsList} userZip={userZip} selected={selectedLocation} onSelect={setSelectedLocation} />
+                </div>
+            )}
+
             <div className="grid grid-cols-2 gap-4">
                 <input required placeholder="First Name" className="p-4 bg-slate-50 border rounded-xl font-bold" value={leadForm.firstName} onChange={e => setLeadForm({...leadForm, firstName: e.target.value})} />
                 <input required placeholder="Last Name" className="p-4 bg-slate-50 border rounded-xl font-bold" value={leadForm.lastName} onChange={e => setLeadForm({...leadForm, lastName: e.target.value})} />

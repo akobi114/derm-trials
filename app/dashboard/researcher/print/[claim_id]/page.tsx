@@ -31,9 +31,10 @@ export default function StudyFlyer() {
   useEffect(() => {
     async function fetchFlyerData() {
       if (!params?.claim_id) return;
+      // UPDATED: Join with organizations instead of researcher_profiles for branding
       const { data: claimData } = await supabase
         .from('claimed_trials')
-        .select(`*, trials (*), researcher_profiles:researcher_id (*)`)
+        .select(`*, trials (*), organizations (*)`)
         .eq('id', params.claim_id)
         .single();
 
@@ -76,7 +77,6 @@ export default function StudyFlyer() {
               <button onClick={() => setIsEditing(true)} className="bg-white text-slate-900 px-5 py-2.5 rounded-xl font-bold border border-slate-200 shadow-sm hover:bg-slate-50 flex items-center gap-2 transition-transform active:scale-95">
                 <Edit3 className="h-4 w-4" /> Edit
               </button>
-              {/* Both buttons trigger the native high-fidelity print dialog */}
               <button onClick={() => window.print()} className="bg-white text-indigo-600 px-5 py-2.5 rounded-xl font-bold border border-indigo-100 hover:bg-indigo-50 flex items-center gap-2 transition-transform active:scale-95">
                 <FileDown className="h-4 w-4" /> Download PDF
               </button>
@@ -95,19 +95,19 @@ export default function StudyFlyer() {
       {/* 2. THE FLYER CONTENT: VECTOR-OPTIMIZED */}
       <div ref={flyerRef} id="flyer-content" className="bg-white w-[8.5in] h-[11in] flex flex-col relative font-sans text-slate-900 overflow-hidden shadow-2xl print:shadow-none print:m-0">
         
-        {/* HEADER: Smaller Brand / Big Impact */}
+        {/* HEADER: Updated to use Organization branding */}
         <div className="bg-[#4f46e5] px-12 py-8 text-white flex justify-between items-center shrink-0">
           <div className="flex items-center gap-6">
-            {data.researcher_profiles?.logo_url ? (
-                <img src={data.researcher_profiles.logo_url} className="h-16 w-auto object-contain" alt="Logo" />
+            {data.organizations?.logo_url ? (
+                <img src={data.organizations.logo_url} className="h-16 w-auto object-contain" alt="Logo" />
             ) : (
-                <div className="p-3 bg-white/20 rounded-xl text-white font-black text-3xl">{data.researcher_profiles?.company_name?.charAt(0)}</div>
+                <div className="p-3 bg-white/20 rounded-xl text-white font-black text-3xl">{data.organizations?.name?.charAt(0)}</div>
             )}
             <div className="border-l border-white/20 pl-6 py-1">
-              <h2 className="text-2xl font-black tracking-tight leading-none mb-1.5">{data.researcher_profiles?.company_name}</h2>
+              <h2 className="text-2xl font-black tracking-tight leading-none mb-1.5">{data.organizations?.name}</h2>
               <p className="text-indigo-100 text-[10px] font-bold uppercase tracking-[0.2em] flex items-center gap-1.5">
                 <MapPin className="h-3 w-3" /> 
-                {(data.site_city || "PHOENIX").toUpperCase()}, {(data.site_state || "AZ").toUpperCase()}
+                {(data.site_location?.city || "PHOENIX").toUpperCase()}, {(data.site_location?.state || "AZ").toUpperCase()}
               </p>
             </div>
           </div>
@@ -191,7 +191,8 @@ export default function StudyFlyer() {
             <div className="max-w-[60%]">
                 <h2 className="text-xl font-black text-slate-900 mb-1 tracking-tight">Check eligibility instantly.</h2>
                 <p className="text-slate-500 text-[10px] font-medium mb-3 leading-relaxed opacity-80">Scan with your smartphone camera to see if you qualify to join. No obligation required.</p>
-                <div className="text-[12px] font-bold text-[#4f46e5] underline decoration-2 underline-offset-4 tracking-tighter">dermtrials.health/{data.researcher_profiles?.slug}</div>
+                {/* UPDATED: Use Organization Slug for the URL branding */}
+                <div className="text-[12px] font-bold text-[#4f46e5] underline decoration-2 underline-offset-4 tracking-tighter uppercase">dermtrials.health/{data.organizations?.slug || 'join'}</div>
             </div>
             <div className="flex flex-col items-center gap-2 mr-6">
                 <div className="bg-white p-2 border-2 border-[#4f46e5] rounded-[1rem] shadow-md print:shadow-none">
@@ -207,7 +208,6 @@ export default function StudyFlyer() {
         </div>
       </div>
 
-      {/* 3. PRINT ENGINE: VECTOR-ONLY MODE */}
       <style jsx global>{`
         @media print {
           body { 
@@ -218,14 +218,12 @@ export default function StudyFlyer() {
             print-color-adjust: exact !important;
           }
           
-          /* Hide all Dashboard UI */
           nav, aside, footer, header, .print\\:hidden, [class*="sidebar"], [class*="navbar"] { 
             display: none !important; 
             height: 0 !important;
             width: 0 !important;
           }
 
-          /* Lock Flyer to Top-Left and Kill Blur (Shadows) */
           #flyer-content { 
             position: fixed !important; 
             top: 0 !important; 
@@ -234,18 +232,16 @@ export default function StudyFlyer() {
             height: 11in !important; 
             margin: 0 !important;
             padding: 0 !important;
-            box-shadow: none !important; /* Critical: Shadows trigger blurry rasterization */
+            box-shadow: none !important;
             border: none !important;
             z-index: 9999 !important;
           }
 
-          /* Force browser to 0 margins to prevent page spill */
           @page { 
             size: 8.5in 11in; 
             margin: 0 !important; 
           }
 
-          /* Force vector-sharp text rendering */
           * { 
             -webkit-font-smoothing: antialiased !important;
             text-rendering: optimizeLegibility !important;

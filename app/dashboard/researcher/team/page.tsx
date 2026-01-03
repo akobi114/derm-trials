@@ -13,100 +13,93 @@ import {
   CheckCircle2, 
   Clock, 
   Eye, 
-  Check, 
+  Crown, 
   Mail, 
   Copy, 
   CheckCheck, 
-  AlertCircle
+  ShieldCheck,
+  RefreshCw,
+  Archive,
+  Stethoscope,
+  ClipboardList,
+  Shield // <--- ADDED THIS IMPORT
 } from 'lucide-react';
 
 export default function TeamManagement() {
-  // ------------------------------------------------------------------
-  // CORE STATE
-  // ------------------------------------------------------------------
+  // --- STATE ---
+  const [currentUser, setCurrentUser] = useState<any>(null); 
   const [profile, setProfile] = useState<any>(null);
-  const [myTrials, setMyTrials] = useState<any[]>([]);
   const [teamMembers, setTeamMembers] = useState<any[]>([]);
   const [loading, setLoading] = useState(true);
-  
-  // ------------------------------------------------------------------
-  // MODAL STATES
-  // ------------------------------------------------------------------
-  
-  // Invite Modal
+  const [viewFilter, setViewFilter] = useState<'active' | 'archived'>('active');
+
+  // --- MODAL STATES ---
   const [isInviteModalOpen, setIsInviteModalOpen] = useState(false);
-  const [inviteEmail, setInviteEmail] = useState("");
-  const [inviteRole, setInviteRole] = useState("coordinator");
-  const [inviteClaims, setInviteClaims] = useState<string[]>([]);
-  const [inviteSearch, setInviteSearch] = useState(""); 
+  
+  // Updated Invite State (Split Name)
+  const [inviteData, setInviteData] = useState({ 
+    firstName: '', 
+    lastName: '', 
+    email: '', 
+    role: 'Clinical Investigator' 
+  });
   const [sendingInvite, setSendingInvite] = useState(false);
   
-  // Success Modal
   const [showInviteSuccess, setShowInviteSuccess] = useState(false);
   const [generatedLink, setGeneratedLink] = useState("");
-  const [successEmail, setSuccessEmail] = useState(""); // FIX: Holds the email for the success message so the form can be cleared
+  const [successEmail, setSuccessEmail] = useState(""); 
   const [copySuccess, setCopySuccess] = useState(false);
 
-  // Delete Modal
-  const [isDeleteModalOpen, setIsDeleteModalOpen] = useState(false);
-  const [memberToDelete, setMemberToDelete] = useState<string | null>(null);
+  const [isStatusModalOpen, setIsStatusModalOpen] = useState(false);
+  const [selectedMemberForStatus, setSelectedMemberForStatus] = useState<any>(null);
+  const [isUpdatingStatus, setIsUpdatingStatus] = useState(false);
 
-  // Access Management Modal
-  const [isAccessModalOpen, setIsAccessModalOpen] = useState(false);
-  const [selectedMember, setSelectedMember] = useState<any>(null);
-  const [tempSelectedTrials, setTempSelectedTrials] = useState<string[]>([]); 
-  const [accessSearch, setAccessSearch] = useState("");
-  const [accessFilter, setAccessFilter] = useState<'all' | 'assigned'>('all');
-  const [savingPermissions, setSavingPermissions] = useState(false);
-
-  // ------------------------------------------------------------------
-  // DATA FETCHING
-  // ------------------------------------------------------------------
+  // --- 1. DATA FETCHING ---
   const fetchTeamData = useCallback(async () => {
-    const { data: { user } } = await supabase.auth.getUser();
-    if (!user) return;
-    
-    const { data: profileData } = await supabase
-        .from('researcher_profiles')
-        .select('*')
-        .eq('user_id', user.id)
-        .single();
-    
-    if (!profileData) return;
-    setProfile(profileData);
+    try {
+        const { data: { user } } = await supabase.auth.getUser();
+        if (!user) return;
+        setCurrentUser(user);
+        
+        // Fetch Current User's Profile
+        let { data: profileData } = await supabase
+            .from('team_members')
+            .select('*, organizations(*)')
+            .eq('user_id', user.id)
+            .maybeSingle();
+        
+        if (!profileData) {
+             // Fallback for OAMs who might just have a profile but no team entry
+             const { data: p } = await supabase.from('researcher_profiles').select('*').eq('user_id', user.id).single();
+             if (p) profileData = { ...p, is_oam: true }; 
+        }
+        
+        setProfile(profileData);
 
-    const [teamRes, trialsRes] = await Promise.all([
-      supabase.from('team_members').select('*').eq('researcher_id', profileData.id),
-      supabase.from('claimed_trials').select('*, trials(*)').eq('researcher_id', profileData.id)
-    ]);
+        if (profileData?.organization_id) {
+            const { data: teamRes } = await supabase
+                .from('team_members')
+                .select('*')
+                .eq('organization_id', profileData.organization_id)
+                .order('is_oam', { ascending: false })
+                .order('created_at', { ascending: false });
 
-    setTeamMembers(teamRes.data || []);
-    
-    // Normalize trial data for the list
-    const formattedTrials = trialsRes.data?.map((t: any) => ({
-        ...t.trials,
-        claim_id: String(t.id),
-        site_location: t.site_location
-    })) || [];
-    
-    setMyTrials(formattedTrials);
-    setLoading(false);
+            setTeamMembers(teamRes || []);
+        }
+    } catch (err) {
+        console.error("Team Fetch Error:", err);
+    } finally {
+        setLoading(false);
+    }
   }, []);
 
   useEffect(() => {
     fetchTeamData();
   }, [fetchTeamData]);
 
-  // ------------------------------------------------------------------
-  // INVITE LOGIC
-  // ------------------------------------------------------------------
-  
-  // FIX: Helper to open modal and clear state simultaneously
+  // --- 2. INVITE LOGIC ---
   const openInviteModal = () => {
-      setInviteEmail(""); // Clear the input
-      setInviteRole("coordinator");
-      setInviteClaims([]);
-      setInviteSearch("");
+      setInviteData({ firstName: '', lastName: '', email: '', role: 'Clinical Investigator' });
       setIsInviteModalOpen(true);
   };
 
@@ -122,368 +115,316 @@ export default function TeamManagement() {
   };
 
   const sendInvite = async () => {
-      if (!inviteEmail || !profile) return;
+      if (!inviteData.email || !inviteData.firstName || !profile?.organization_id) return;
       setSendingInvite(true);
 
-      // 1. Create Team Member Row
-      const { data: newMember, error } = await supabase
-          .from('team_members')
-          .insert({
-              researcher_id: profile.id,
-              email: inviteEmail,
-              role: inviteRole,
-              status: 'invited'
-          })
-          .select()
-          .single();
+      try {
+        // A. CREATE GHOST PROFILE (Fixes "null value in column researcher_id" error)
+        // This reserves the name/email so the user can claim it later
+        const { data: newProfile, error: profileError } = await supabase
+            .from('researcher_profiles')
+            .insert({
+                organization_id: profile.organization_id,
+                first_name: inviteData.firstName,
+                last_name: inviteData.lastName,
+                full_name: `${inviteData.firstName} ${inviteData.lastName}`,
+                email: inviteData.email.trim().toLowerCase(),
+                role: inviteData.role,
+                status: 'invited',
+                is_verified: false
+            })
+            .select('id')
+            .single();
 
-      if (error) {
-          alert("Error: " + error.message);
+        if (profileError) throw new Error("Profile Creation Error: " + profileError.message);
+
+        // B. CREATE TEAM MEMBER
+        const { data: newMember, error: memberError } = await supabase
+            .from('team_members')
+            .insert({
+                organization_id: profile.organization_id,
+                researcher_id: newProfile.id, // Linked!
+                first_name: inviteData.firstName,
+                last_name: inviteData.lastName,
+                email: inviteData.email.trim().toLowerCase(),
+                role: inviteData.role,
+                status: 'invited',
+                is_active: true,
+                is_oam: false 
+            })
+            .select()
+            .single();
+
+        if (memberError) throw new Error("Team Member Error: " + memberError.message);
+
+        const link = `${window.location.origin}/auth/signup?role=team_member&token=${newMember.token}`;
+        setGeneratedLink(link);
+        setSuccessEmail(inviteData.email); 
+        
+        setTeamMembers(prev => [newMember, ...prev]);
+        setIsInviteModalOpen(false);
+        setShowInviteSuccess(true);  
+
+      } catch (err: any) {
+          alert(err.message);
+      } finally {
           setSendingInvite(false);
+      }
+  };
+
+  // --- 3. ARCHIVE LOGIC (OAM ONLY) ---
+  const toggleMemberActiveStatus = async () => {
+      if (!selectedMemberForStatus) return;
+      if (!profile?.is_oam) {
+          alert("Security Restriction: Only the Account Manager can archive staff.");
+          return;
+      }
+      
+      if (selectedMemberForStatus.is_oam) {
+          alert("You cannot archive yourself. Please transfer ownership first in Settings.");
+          setIsStatusModalOpen(false);
           return;
       }
 
-      // 2. Add Permissions if selected
-      if (inviteClaims.length > 0) {
-          const perms = inviteClaims.map(cid => ({
-              team_member_id: newMember.id,
-              claim_id: cid
-          }));
-          await supabase.from('claim_permissions').insert(perms);
-      }
+      setIsUpdatingStatus(true);
+      const newActiveState = !selectedMemberForStatus.is_active;
 
-      // 3. Handle Success State
-      const link = `${window.location.origin}/auth/signup?role=team_member&token=${newMember.token}`;
-      setGeneratedLink(link);
-      setSuccessEmail(inviteEmail); // Store this for the success message
-      setTeamMembers([...teamMembers, newMember]);
-      
-      // 4. Close Invite Modal & Clear Form
-      setIsInviteModalOpen(false);
-      setInviteEmail(""); // Clear form for next time
-      setInviteClaims([]);
-      
-      // 5. Open Success Modal
-      setShowInviteSuccess(true);  
-      setSendingInvite(false);
-  };
+      const { error } = await supabase
+          .from('team_members')
+          .update({ is_active: newActiveState })
+          .eq('id', selectedMemberForStatus.id);
 
-  // ------------------------------------------------------------------
-  // DELETE LOGIC
-  // ------------------------------------------------------------------
-  const confirmDelete = async () => {
-      if (!memberToDelete) return;
-      await supabase.from('team_members').delete().eq('id', memberToDelete);
-      setTeamMembers(teamMembers.filter(m => m.id !== memberToDelete));
-      setIsDeleteModalOpen(false);
-  };
-
-  // ------------------------------------------------------------------
-  // ACCESS MANAGEMENT LOGIC
-  // ------------------------------------------------------------------
-  const openAccessModal = async (member: any) => {
-      setSelectedMember(member);
-      setAccessSearch("");
-      setAccessFilter("all");
-
-      const { data } = await supabase
-          .from('claim_permissions')
-          .select('claim_id')
-          .eq('team_member_id', member.id);
-      
-      setTempSelectedTrials(data?.map((p: any) => String(p.claim_id)) || []);
-      setIsAccessModalOpen(true);
-  };
-
-  const handleCheckboxChange = (claimId: string) => {
-      const id = String(claimId);
-      if (tempSelectedTrials.includes(id)) {
-          setTempSelectedTrials(prev => prev.filter(i => i !== id));
+      if (!error) {
+          setTeamMembers(prev => prev.map(m => 
+              m.id === selectedMemberForStatus.id ? { ...m, is_active: newActiveState } : m
+          ));
+          setIsStatusModalOpen(false);
       } else {
-          setTempSelectedTrials(prev => [...prev, id]);
+          alert("Failed: " + error.message);
       }
+      setIsUpdatingStatus(false);
   };
 
-  // Bulk Select for Access Modal
-  const handleBulkSelectAccess = (selectAll: boolean) => {
-      const visibleIds = filteredAccessTrials.map(t => t.claim_id);
-      if (selectAll) {
-          const toAdd = visibleIds.filter(id => !tempSelectedTrials.includes(id));
-          setTempSelectedTrials(prev => [...prev, ...toAdd]);
-      } else {
-          setTempSelectedTrials(prev => prev.filter(id => !visibleIds.includes(id)));
-      }
+  // --- 4. ROLE CHANGE ---
+  const changeMemberRole = async (memberId: string, newRole: string) => {
+    if (!profile?.is_oam) return;
+
+    setTeamMembers(prev => prev.map(m => m.id === memberId ? { ...m, role: newRole } : m));
+
+    await supabase.from('team_members').update({ role: newRole }).eq('id', memberId);
+    
+    // Sync Profile too
+    const memberEmail = teamMembers.find(m => m.id === memberId)?.email;
+    if (memberEmail) {
+        await supabase
+            .from('researcher_profiles')
+            .update({ role: newRole })
+            .eq('organization_id', profile.organization_id)
+            .eq('email', memberEmail);
+    }
   };
 
-  const savePermissions = async () => {
-      if (!selectedMember) return;
-      setSavingPermissions(true);
-
-      const { data: dbData } = await supabase
-          .from('claim_permissions')
-          .select('claim_id')
-          .eq('team_member_id', selectedMember.id);
-      
-      const dbIds = dbData?.map((p: any) => String(p.claim_id)) || [];
-
-      // Surgical Diff Logic
-      const toAdd = tempSelectedTrials.filter(id => !dbIds.includes(id));
-      const toRemove = dbIds.filter(id => !tempSelectedTrials.includes(id));
-
-      try {
-          if (toRemove.length > 0) {
-              await supabase
-                  .from('claim_permissions')
-                  .delete()
-                  .eq('team_member_id', selectedMember.id)
-                  .in('claim_id', toRemove);
-          }
-
-          if (toAdd.length > 0) {
-              await supabase
-                  .from('claim_permissions')
-                  .insert(toAdd.map(cid => ({
-                      team_member_id: selectedMember.id,
-                      claim_id: cid
-                  })));
-          }
-
-          setIsAccessModalOpen(false);
-          alert("Access saved successfully.");
-      } catch (err: any) {
-          alert("Error: " + err.message);
-      } finally {
-          setSavingPermissions(false);
-      }
-  };
-
-  // ------------------------------------------------------------------
-  // FILTERS
-  // ------------------------------------------------------------------
-  
-  // Filter logic for Invite Modal
-  const filteredInviteTrials = myTrials.filter(t => 
-      t.title?.toLowerCase().includes(inviteSearch.toLowerCase()) || 
-      t.nct_id?.toLowerCase().includes(inviteSearch.toLowerCase()) ||
-      t.site_location?.city?.toLowerCase().includes(inviteSearch.toLowerCase())
+  const displayedMembers = teamMembers.filter(m => 
+    viewFilter === 'active' ? m.is_active : !m.is_active
   );
 
-  // Toggle All for Invite Modal
-  const toggleSelectAllTrials = () => {
-      const targetIds = filteredInviteTrials.map(t => t.claim_id);
-      const allSelected = targetIds.every(id => inviteClaims.includes(id));
-      
-      if (allSelected) {
-          setInviteClaims(prev => prev.filter(id => !targetIds.includes(id)));
-      } else {
-          const newSelection = [...inviteClaims];
-          targetIds.forEach(id => { if (!newSelection.includes(id)) newSelection.push(id); });
-          setInviteClaims(newSelection);
-      }
-  };
+  if (loading) return <div className="h-screen flex items-center justify-center"><Loader2 className="h-8 w-8 animate-spin text-indigo-600"/></div>;
 
-  // Filter logic for Access Modal
-  const filteredAccessTrials = myTrials.filter(t => {
-      const match = t.nct_id?.toLowerCase().includes(accessSearch.toLowerCase()) || 
-                    t.title?.toLowerCase().includes(accessSearch.toLowerCase());
-      if (!match) return false;
-      if (accessFilter === 'assigned') return tempSelectedTrials.includes(t.claim_id);
-      return true;
-  });
-
-  if (loading) {
-      return (
-          <div className="p-8 flex items-center justify-center">
-              <Loader2 className="h-8 w-8 animate-spin text-slate-400" />
-          </div>
-      );
-  }
-
-  // ------------------------------------------------------------------
-  // RENDER
-  // ------------------------------------------------------------------
   return (
-    <div className="p-8 animate-in fade-in duration-300">
+    <div className="p-10 max-w-7xl mx-auto animate-in fade-in duration-500 bg-slate-50 min-h-screen">
         
         {/* HEADER */}
-        <header className="flex justify-between items-end mb-10">
+        <header className="flex justify-between items-start mb-12">
           <div>
-            <h1 className="text-2xl font-bold text-slate-900 tracking-tight">Team Management</h1>
-            <p className="text-slate-500 text-sm mt-1">{profile?.company_name}</p>
+            <div className="flex items-center gap-3 mb-2">
+                <div className="p-2 bg-slate-900 text-white rounded-lg"><Users className="h-5 w-5" /></div>
+                <h1 className="text-2xl font-black text-slate-900 tracking-tight uppercase">Research Team</h1>
+            </div>
+            <p className="text-slate-400 text-[10px] font-black uppercase tracking-[0.2em]">
+              {profile?.organizations?.name || "Organization Roster"}
+            </p>
           </div>
-          <button 
-            onClick={openInviteModal} 
-            className="flex items-center gap-2 bg-indigo-600 text-white px-5 py-2.5 rounded-lg font-bold text-sm shadow-sm transition-all hover:bg-indigo-700 transform hover:-translate-y-0.5"
-          >
-            <UserPlus className="h-4 w-4" /> 
-            Invite Member
-          </button>
+          
+          <div className="flex gap-4">
+              <div className="bg-white border border-slate-200 rounded-xl p-1 flex shadow-sm">
+                  <button onClick={() => setViewFilter('active')} className={`px-4 py-2 rounded-lg text-[10px] font-black uppercase tracking-widest transition-all ${viewFilter === 'active' ? 'bg-slate-900 text-white shadow-md' : 'text-slate-400 hover:text-slate-600'}`}>Active</button>
+                  <button onClick={() => setViewFilter('archived')} className={`px-4 py-2 rounded-lg text-[10px] font-black uppercase tracking-widest transition-all ${viewFilter === 'archived' ? 'bg-slate-900 text-white shadow-md' : 'text-slate-400 hover:text-slate-600'}`}>Archived</button>
+              </div>
+
+              <button 
+                onClick={openInviteModal} 
+                className="flex items-center gap-2 bg-indigo-600 text-white px-6 py-3 rounded-xl font-black text-xs uppercase tracking-widest shadow-xl hover:bg-indigo-700 transition-all active:scale-95"
+              >
+                <UserPlus className="h-4 w-4" /> 
+                Add Member
+              </button>
+          </div>
         </header>
 
-        {/* TEAM TABLE */}
-        <div className="bg-white rounded-2xl border border-slate-200 shadow-sm overflow-hidden">
+        {/* ROSTER TABLE */}
+        <div className="bg-white rounded-[2.5rem] border border-slate-200 shadow-xl shadow-slate-200/40 overflow-hidden">
             <table className="w-full text-left text-sm">
-                <thead className="bg-slate-50 text-slate-500 font-bold uppercase text-xs border-b border-slate-200">
+                <thead className="bg-slate-50/50 text-slate-400 font-black uppercase text-[10px] tracking-widest border-b border-slate-100">
                     <tr>
-                        <th className="px-6 py-4">Email</th>
-                        <th className="px-6 py-4">Role</th>
-                        <th className="px-6 py-4">Status</th>
-                        <th className="px-6 py-4 text-right">Actions</th>
+                        <th className="px-8 py-6">Staff Member</th>
+                        <th className="px-8 py-6">System Role</th>
+                        <th className="px-8 py-6">Status</th>
+                        <th className="px-8 py-6 text-right">Actions</th>
                     </tr>
                 </thead>
-                <tbody className="divide-y divide-slate-100">
-                    {teamMembers.map((member) => (
-                        <tr key={member.id} className="hover:bg-slate-50 transition-colors group">
-                            <td className="px-6 py-4 font-bold text-slate-700">{member.email}</td>
-                            <td className="px-6 py-4">
-                                <span className={`px-2 py-1 rounded text-xs font-bold uppercase ${
-                                    member.role === 'admin' ? 'bg-purple-100 text-purple-700' : 
-                                    member.role === 'sub_pi' ? 'bg-blue-100 text-blue-700' : 'bg-indigo-50 text-indigo-700'
-                                }`}>
-                                    {member.role === 'sub_pi' ? 'Sub-PI' : member.role}
-                                </span>
-                            </td>
-                            <td className="px-6 py-4 text-slate-500">
-                                {member.status === 'invited' ? (
+                <tbody className="divide-y divide-slate-50 font-medium">
+                    {displayedMembers.map((member) => (
+                        <tr key={member.id} className={`hover:bg-slate-50/80 transition-colors group ${!member.is_active ? 'opacity-50 grayscale' : ''}`}>
+                            
+                            {/* NAME / EMAIL COLUMN */}
+                            <td className="px-8 py-6">
+                                <div className="flex flex-col">
                                     <div className="flex items-center gap-2">
-                                        <span className="text-amber-500 font-bold flex items-center gap-1">
-                                            <Clock className="h-3 w-3"/> Invited
+                                        <span className="font-bold text-slate-900 text-sm">
+                                            {member.first_name ? `${member.first_name} ${member.last_name}` : member.email}
                                         </span>
-                                        <button 
-                                            onClick={() => handleViewInvite(member)} 
-                                            className="p-1 text-slate-400 hover:text-indigo-600 rounded transition-colors" 
-                                            title="View Invite Link"
-                                        >
-                                            <LinkIcon className="h-3 w-3" />
-                                        </button>
+                                        {member.is_oam && (
+                                            <div className="bg-amber-100 text-amber-700 p-1 rounded-full" title="Organization Account Manager">
+                                                <Crown className="h-3 w-3 fill-amber-500 text-amber-600" />
+                                            </div>
+                                        )}
                                     </div>
-                                ) : (
-                                    <span className="text-emerald-600 font-bold flex items-center gap-1">
+                                    <span className="text-[10px] font-bold text-slate-400">{member.email}</span>
+                                </div>
+                            </td>
+
+                            {/* ROLE COLUMN */}
+                            <td className="px-8 py-6">
+                                <div className="relative w-fit">
+                                    <select 
+                                        value={member.role}
+                                        onChange={(e) => changeMemberRole(member.id, e.target.value)}
+                                        disabled={!profile?.is_oam || member.is_oam || !member.is_active}
+                                        className={`appearance-none bg-slate-50 border border-slate-100 text-[10px] font-black uppercase tracking-widest rounded-lg pl-8 pr-4 py-2 outline-none transition-all cursor-pointer ${profile?.is_oam && !member.is_oam ? 'hover:border-indigo-300 focus:ring-2 focus:ring-indigo-500' : 'opacity-70 cursor-not-allowed'}`}
+                                    >
+                                        <option value="Clinical Coordinator">Clinical Coordinator</option>
+                                        <option value="Clinical Investigator">Clinical Investigator</option>
+                                    </select>
+                                    <div className="absolute left-2.5 top-2 pointer-events-none text-slate-400">
+                                        {member.role === 'Clinical Investigator' ? <Stethoscope className="h-3.5 w-3.5" /> : <ClipboardList className="h-3.5 w-3.5" />}
+                                    </div>
+                                </div>
+                            </td>
+
+                            {/* STATUS COLUMN */}
+                            <td className="px-8 py-6">
+                                {member.status === 'invited' ? (
+                                    <button onClick={() => handleViewInvite(member)} className="flex items-center gap-2 text-amber-600 font-black text-[10px] uppercase tracking-widest bg-amber-50 px-3 py-1 rounded-full border border-amber-100 hover:bg-amber-100 transition-colors">
+                                        <Clock className="h-3 w-3"/> Pending Invite
+                                    </button>
+                                ) : member.is_active ? (
+                                    <span className="text-emerald-600 font-black text-[10px] uppercase tracking-widest flex items-center gap-1.5 bg-emerald-50 px-3 py-1 rounded-full border border-emerald-100">
                                         <CheckCircle2 className="h-3 w-3"/> Active
+                                    </span>
+                                ) : (
+                                    <span className="text-slate-400 font-black text-[10px] uppercase tracking-widest flex items-center gap-1.5 bg-slate-100 px-3 py-1 rounded-full border border-slate-200">
+                                        <Archive className="h-3 w-3"/> Archived
                                     </span>
                                 )}
                             </td>
-                            <td className="px-6 py-4 text-right flex justify-end gap-2">
-                                <button 
-                                    onClick={() => openAccessModal(member)} 
-                                    className="p-2 text-slate-400 hover:text-indigo-600 rounded-lg transition-colors border border-transparent hover:border-slate-200" 
-                                    title="Manage Access"
-                                >
-                                    <Eye className="h-4 w-4" />
-                                </button>
-                                <button 
-                                    onClick={() => { setMemberToDelete(member.id); setIsDeleteModalOpen(true); }} 
-                                    className="p-2 text-slate-400 hover:text-red-500 rounded-lg transition-colors border border-transparent hover:border-slate-200" 
-                                    title="Remove Member"
-                                >
-                                    <Trash2 className="h-4 w-4" />
-                                </button>
+
+                            {/* ACTIONS COLUMN */}
+                            <td className="px-8 py-6 text-right">
+                                <div className="flex justify-end gap-2 opacity-0 group-hover:opacity-100 transition-all">
+                                    {profile?.is_oam && !member.is_oam && (
+                                        <button 
+                                            onClick={() => { setSelectedMemberForStatus(member); setIsStatusModalOpen(true); }} 
+                                            className={`p-2.5 rounded-xl transition-all border border-transparent shadow-sm ${
+                                                member.is_active ? 'text-slate-400 hover:text-rose-500 hover:bg-white hover:border-slate-200' : 'text-indigo-500 hover:bg-indigo-50 hover:border-indigo-100'
+                                            }`} 
+                                            title={member.is_active ? "Archive User" : "Restore User"}
+                                        >
+                                            {member.is_active ? <Trash2 className="h-4 w-4" /> : <RefreshCw className="h-4 w-4" />}
+                                        </button>
+                                    )}
+                                </div>
                             </td>
                         </tr>
                     ))}
                 </tbody>
             </table>
-            {teamMembers.length === 0 && (
-                <div className="px-6 py-10 text-center text-slate-400 italic">
-                    No team members yet. Invite someone above.
+            {displayedMembers.length === 0 && (
+                <div className="px-8 py-24 text-center">
+                    <div className="w-16 h-16 bg-slate-50 rounded-full flex items-center justify-center mx-auto mb-4 border border-slate-100">
+                        <Users className="h-8 w-8 text-slate-200" />
+                    </div>
+                    <p className="text-slate-400 font-bold text-sm uppercase tracking-widest">No staff members found.</p>
                 </div>
             )}
         </div>
 
-        {/* INVITE MODAL (RESTORED BEAUTIFUL UI) */}
+        {/* --- PREMIUM INVITE MODAL --- */}
         {isInviteModalOpen && (
-            <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-900/60 backdrop-blur-sm animate-in fade-in duration-200">
-                <div className="bg-white rounded-2xl p-6 w-full max-w-md shadow-2xl overflow-hidden flex flex-col max-h-[90vh]">
-                    <div className="flex justify-between items-center mb-6">
-                        <h3 className="font-bold text-lg text-slate-900">Invite Team Member</h3>
-                        <button onClick={() => setIsInviteModalOpen(false)} className="text-slate-400 hover:text-slate-600">
-                            <X className="h-5 w-5" />
-                        </button>
+            <div className="fixed inset-0 z-50 flex items-center justify-center p-6 bg-slate-900/60 backdrop-blur-md animate-in fade-in duration-300">
+                <div className="bg-white w-full max-w-lg rounded-[2.5rem] shadow-2xl p-8 animate-in zoom-in-95 duration-300">
+                    <div className="flex justify-between items-center mb-8">
+                        <h2 className="text-2xl font-black text-slate-900">Invite New Member</h2>
+                        <button onClick={() => setIsInviteModalOpen(false)}><X className="h-6 w-6 text-slate-400 hover:text-slate-900" /></button>
                     </div>
-                    
-                    <div className="space-y-4 overflow-y-auto flex-1 p-1">
-                        <div>
-                            <label className="block text-xs font-bold text-slate-500 uppercase mb-1">Email Address</label>
-                            {/* FIX: added new-password to prevent autofill persistence */}
+
+                    <div className="space-y-5">
+                        <div className="grid grid-cols-2 gap-4">
+                            <div className="space-y-1">
+                                <label className="text-[10px] font-black text-slate-400 uppercase tracking-widest ml-1">First Name</label>
+                                <input 
+                                    className="w-full p-4 bg-slate-50 border-2 border-transparent rounded-2xl font-bold text-slate-900 outline-none focus:bg-white focus:border-indigo-600 transition-all"
+                                    placeholder="Jane"
+                                    value={inviteData.firstName}
+                                    onChange={e => setInviteData({...inviteData, firstName: e.target.value})}
+                                />
+                            </div>
+                            <div className="space-y-1">
+                                <label className="text-[10px] font-black text-slate-400 uppercase tracking-widest ml-1">Last Name</label>
+                                <input 
+                                    className="w-full p-4 bg-slate-50 border-2 border-transparent rounded-2xl font-bold text-slate-900 outline-none focus:bg-white focus:border-indigo-600 transition-all"
+                                    placeholder="Doe"
+                                    value={inviteData.lastName}
+                                    onChange={e => setInviteData({...inviteData, lastName: e.target.value})}
+                                />
+                            </div>
+                        </div>
+
+                        <div className="space-y-1">
+                            <label className="text-[10px] font-black text-slate-400 uppercase tracking-widest ml-1">Professional Email</label>
                             <input 
-                                type="email" 
-                                autoComplete="new-password"
-                                className="w-full p-3 bg-slate-50 border border-slate-200 rounded-xl outline-none focus:ring-2 focus:ring-indigo-500 font-bold text-slate-700" 
-                                placeholder="colleague@clinic.com" 
-                                value={inviteEmail} 
-                                onChange={e => setInviteEmail(e.target.value)} 
+                                className="w-full p-4 bg-slate-50 border-2 border-transparent rounded-2xl font-bold text-slate-900 outline-none focus:bg-white focus:border-indigo-600 transition-all"
+                                placeholder="jane@clinic.com"
+                                value={inviteData.email}
+                                onChange={e => setInviteData({...inviteData, email: e.target.value})}
                             />
                         </div>
-                        
-                        <div>
-                            <label className="block text-xs font-bold text-slate-500 uppercase mb-1">Role</label>
-                            <select 
-                                className="w-full p-3 bg-slate-50 border border-slate-200 rounded-xl outline-none focus:ring-2 focus:ring-indigo-500 font-bold text-slate-700" 
-                                value={inviteRole} 
-                                onChange={e => setInviteRole(e.target.value)}
-                            >
-                                <option value="coordinator">Coordinator (Specific Studies)</option>
-                                {/* FIX: Added Sub-PI Role */}
-                                <option value="sub_pi">Sub-Principal Investigator (Sub-PI)</option>
-                                <option value="admin">Admin (Full Access)</option>
-                            </select>
-                            <p className="text-[10px] text-slate-400 mt-1">
-                                {inviteRole === 'admin' ? "Admins can see all studies and billing." : 
-                                 inviteRole === 'sub_pi' ? "Sub-PIs can edit studies but cannot see billing." :
-                                 "Coordinators only see studies you select below."}
-                            </p>
-                        </div>
-                        
-                        {/* CONDITIONAL: ONLY SHOW TRIAL SELECTOR FOR COORDINATORS/SUB-PIS */}
-                        {inviteRole !== 'admin' && (
-                            <div>
-                                <div className="flex justify-between items-center mb-2">
-                                    <label className="block text-xs font-bold text-slate-500 uppercase">Assign Access</label>
-                                    <button onClick={toggleSelectAllTrials} className="text-[10px] font-bold text-indigo-600 hover:underline">
-                                        {inviteClaims.length > 0 && inviteClaims.length === filteredInviteTrials.length ? "Deselect All" : "Select All"}
-                                    </button>
-                                </div>
-                                
-                                <div className="relative mb-2">
-                                    <Search className="absolute left-3 top-2.5 h-3 w-3 text-slate-400" />
-                                    <input 
-                                        type="text" 
-                                        placeholder="Filter studies..." 
-                                        className="w-full pl-8 p-2 bg-slate-50 border border-slate-200 rounded-lg text-xs outline-none focus:border-indigo-500" 
-                                        value={inviteSearch} 
-                                        onChange={(e) => setInviteSearch(e.target.value)} 
-                                    />
-                                </div>
-                                
-                                <div className="border border-slate-200 rounded-xl p-2 max-h-64 overflow-y-auto bg-slate-50">
-                                    {filteredInviteTrials.length > 0 ? filteredInviteTrials.map((t: any) => (
-                                        <label key={t.claim_id} className="flex items-center gap-3 p-3 hover:bg-white rounded-lg transition-colors group cursor-pointer">
-                                            <input 
-                                                type="checkbox" 
-                                                className="rounded text-indigo-600 focus:ring-indigo-500 w-4 h-4" 
-                                                checked={inviteClaims.includes(String(t.claim_id))} 
-                                                onChange={(e) => { 
-                                                    if (e.target.checked) setInviteClaims((prev: string[]) => [...prev, String(t.claim_id)]); 
-                                                    else setInviteClaims((prev: string[]) => prev.filter(id => id !== String(t.claim_id))); 
-                                                }} 
-                                            />
-                                            <div>
-                                                <div className="text-sm font-bold text-slate-700 group-hover:text-indigo-900">{t.title}</div>
-                                                <div className="text-xs text-slate-400">{t.site_location?.city || "Remote"}</div>
-                                            </div>
-                                        </label>
-                                    )) : <div className="text-xs text-slate-400 p-4 text-center italic">No matching studies found.</div>}
-                                </div>
-                                <div className="text-right mt-1 text-[10px] text-slate-400">{inviteClaims.length} selected</div>
+
+                        <div className="space-y-1">
+                            <label className="text-[10px] font-black text-slate-400 uppercase tracking-widest ml-1">System Role</label>
+                            <div className="grid grid-cols-2 gap-3">
+                                <button 
+                                    onClick={() => setInviteData({...inviteData, role: 'Clinical Investigator'})}
+                                    className={`p-4 rounded-2xl border-2 transition-all flex flex-col items-center gap-2 ${inviteData.role === 'Clinical Investigator' ? 'border-indigo-600 bg-indigo-50 text-indigo-700' : 'border-slate-100 text-slate-400 hover:border-slate-200'}`}
+                                >
+                                    <Stethoscope className="h-6 w-6" />
+                                    <span className="text-[10px] font-black uppercase">Investigator</span>
+                                </button>
+                                <button 
+                                    onClick={() => setInviteData({...inviteData, role: 'Clinical Coordinator'})}
+                                    className={`p-4 rounded-2xl border-2 transition-all flex flex-col items-center gap-2 ${inviteData.role === 'Clinical Coordinator' ? 'border-slate-900 bg-slate-900 text-white' : 'border-slate-100 text-slate-400 hover:border-slate-200'}`}
+                                >
+                                    <Shield className="h-6 w-6" />
+                                    <span className="text-[10px] font-black uppercase">Coordinator</span>
+                                </button>
                             </div>
-                        )}
-                        
+                        </div>
+
                         <button 
-                            onClick={sendInvite} 
-                            disabled={sendingInvite || !inviteEmail} 
-                            className="w-full py-3.5 bg-indigo-600 text-white rounded-xl font-bold shadow-lg transition-all transform hover:-translate-y-0.5 disabled:opacity-50 flex items-center justify-center gap-2"
+                            onClick={sendInvite}
+                            disabled={sendingInvite || !inviteData.email || !inviteData.firstName}
+                            className="w-full py-5 bg-indigo-600 text-white rounded-2xl font-black text-xs uppercase tracking-[0.2em] hover:bg-indigo-700 transition-all shadow-xl shadow-indigo-200 mt-4 flex items-center justify-center gap-2 disabled:opacity-50"
                         >
-                            {sendingInvite ? "Generating..." : "Generate Invite Link"} <LinkIcon className="h-4 w-4" />
+                            {sendingInvite ? <Loader2 className="h-5 w-5 animate-spin" /> : 'Send Secure Invite'}
                         </button>
                     </div>
                 </div>
@@ -493,166 +434,62 @@ export default function TeamManagement() {
         {/* SUCCESS MODAL */}
         {showInviteSuccess && (
             <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-900/60 backdrop-blur-sm animate-in fade-in duration-200">
-                <div className="bg-white rounded-2xl p-6 w-full max-w-md shadow-2xl overflow-hidden text-center">
-                    <div className="w-16 h-16 bg-emerald-100 text-emerald-600 rounded-full flex items-center justify-center mx-auto mb-4">
-                        <CheckCircle2 className="h-8 w-8" />
+                <div className="bg-white rounded-[3rem] p-12 w-full max-w-lg shadow-2xl text-center border border-slate-100">
+                    <div className="w-24 h-24 bg-emerald-50 text-emerald-500 rounded-full flex items-center justify-center mx-auto mb-8 shadow-sm">
+                        <ShieldCheck className="h-12 w-12" />
                     </div>
-                    <h3 className="text-xl font-bold text-slate-900 mb-2">Member Invited!</h3>
-                    <p className="text-sm text-slate-500 mb-6 leading-relaxed">
-                        Share this link with <strong>{successEmail}</strong> so they can join your team.
+                    <h3 className="text-3xl font-black text-slate-900 mb-4 uppercase tracking-tight">Invite Ready</h3>
+                    <p className="text-sm font-medium text-slate-500 mb-10 leading-relaxed">
+                        Secure token generated for <span className="text-slate-900 font-bold">{successEmail}</span>.
                     </p>
-                    <div className="bg-slate-50 border border-slate-200 rounded-xl p-3 flex items-center gap-3 mb-4">
-                        <div className="flex-1 font-mono text-xs text-slate-600 truncate">{generatedLink}</div>
+                    <div className="bg-slate-50 border border-slate-200 rounded-3xl p-5 flex items-center gap-4 mb-10 shadow-inner">
+                        <div className="flex-1 font-mono text-[10px] font-bold text-slate-400 truncate text-left">{generatedLink}</div>
                         <button 
-                            onClick={() => { 
-                                navigator.clipboard.writeText(generatedLink); 
-                                setCopySuccess(true); 
-                                setTimeout(() => setCopySuccess(false), 2000); 
-                            }} 
-                            className="p-2 bg-white border border-slate-200 rounded-lg hover:text-indigo-600 transition-colors shadow-sm"
+                            onClick={() => { navigator.clipboard.writeText(generatedLink); setCopySuccess(true); setTimeout(() => setCopySuccess(false), 2000); }} 
+                            className="p-3 bg-white border border-slate-200 rounded-2xl hover:text-indigo-600 transition-all shadow-sm active:scale-90"
                         >
-                            {copySuccess ? <CheckCheck className="h-4 w-4 text-emerald-500" /> : <Copy className="h-4 w-4" />}
+                            {copySuccess ? <CheckCheck className="h-5 w-5 text-emerald-500" /> : <Copy className="h-5 w-5" />}
                         </button>
                     </div>
-                    <div className="grid grid-cols-2 gap-3">
+                    <div className="grid grid-cols-1 gap-4">
                         <button 
-                            onClick={() => setShowInviteSuccess(false)} 
-                            className="py-3 border border-slate-200 rounded-xl font-bold text-sm text-slate-600 hover:bg-slate-50 transition-colors"
+                            onClick={() => window.open(`mailto:${successEmail}?subject=DermTrials Invite&body=Join our team: ${encodeURIComponent(generatedLink)}`)} 
+                            className="py-5 bg-indigo-600 text-white rounded-[2rem] font-black text-xs uppercase tracking-widest hover:bg-indigo-700 shadow-xl transition-all flex items-center justify-center gap-3"
                         >
-                            Done
+                            <Mail className="h-4 w-4" /> Send Email
                         </button>
-                        <button 
-                            onClick={() => window.open(`mailto:${successEmail}?subject=Invitation&body=${encodeURIComponent(generatedLink)}`)} 
-                            className="py-3 bg-indigo-600 text-white rounded-xl font-bold text-sm hover:bg-indigo-700 shadow-lg flex items-center justify-center gap-2"
-                        >
-                            <Mail className="h-4 w-4" /> Draft Email
-                        </button>
+                        <button onClick={() => setShowInviteSuccess(false)} className="py-5 bg-slate-50 text-slate-400 rounded-[2rem] font-black text-xs uppercase tracking-widest hover:bg-slate-100 transition-colors">Close</button>
                     </div>
                 </div>
             </div>
         )}
 
-        {/* ACCESS MODAL */}
-        {isAccessModalOpen && (
-            <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-900/60 backdrop-blur-sm animate-in fade-in duration-200">
-                <div className="bg-white rounded-2xl w-full max-w-2xl shadow-2xl overflow-hidden flex flex-col max-h-[85vh]">
-                    <div className="p-6 border-b flex justify-between items-start">
-                        <div>
-                            <h3 className="font-bold text-xl text-slate-900">Manage Study Access</h3>
-                            <p className="text-sm text-slate-500 mt-1">{selectedMember?.email}</p>
-                        </div>
-                        <button onClick={() => setIsAccessModalOpen(false)} className="text-slate-400 hover:text-slate-600 transition-colors">
-                            <X className="h-6 w-6" />
-                        </button>
+        {/* STATUS TOGGLE MODAL */}
+        {isStatusModalOpen && (
+            <div className="fixed inset-0 z-[100] flex items-center justify-center p-4 bg-slate-900/70 backdrop-blur-md animate-in fade-in duration-200">
+                <div className="bg-white rounded-[3rem] p-12 w-full max-w-md shadow-2xl text-center border border-slate-100">
+                    <div className={`w-20 h-20 rounded-full flex items-center justify-center mx-auto mb-8 shadow-sm ${selectedMemberForStatus?.is_active ? 'bg-rose-50 text-rose-500' : 'bg-indigo-50 text-indigo-500'}`}>
+                        {selectedMemberForStatus?.is_active ? <Trash2 className="h-10 w-10" /> : <RefreshCw className="h-10 w-10" />}
                     </div>
-
-                    <div className="px-6 pt-6">
-                        <div className="bg-blue-50 border border-blue-100 rounded-xl p-4 flex gap-3 text-xs text-blue-800 leading-relaxed">
-                            <AlertCircle className="h-5 w-5 text-blue-600 shrink-0" />
-                            <div><strong>How it works:</strong> Check to grant access, uncheck to revoke. Changes save on <strong>"Save Changes"</strong>.</div>
-                        </div>
-                    </div>
-
-                    <div className="px-6 py-4 flex flex-col sm:flex-row gap-4 justify-between items-center">
-                        <div className="flex bg-slate-100 p-1 rounded-lg">
-                            <button 
-                                onClick={() => setAccessFilter('all')} 
-                                className={`px-4 py-1.5 rounded-md text-xs font-bold transition-all ${accessFilter === 'all' ? 'bg-white text-slate-900 shadow-sm' : 'text-slate-500 hover:text-slate-700'}`}
-                            >
-                                All Studies
-                            </button>
-                            <button 
-                                onClick={() => setAccessFilter('assigned')} 
-                                className={`px-4 py-1.5 rounded-md text-xs font-bold transition-all ${accessFilter === 'assigned' ? 'bg-white text-slate-900 shadow-sm' : 'text-slate-500 hover:text-slate-700'}`}
-                            >
-                                Assigned Only
-                            </button>
-                        </div>
-                        <div className="relative flex-1 w-full sm:w-64">
-                             <Search className="absolute left-3 top-2.5 h-3.5 w-3.5 text-slate-400" />
-                             <input 
-                                 type="text" 
-                                 placeholder="Search all studies..." 
-                                 className="w-full pl-9 p-2 bg-slate-50 border border-slate-200 rounded-lg outline-none focus:ring-2 focus:ring-indigo-500 text-sm" 
-                                 value={accessSearch} 
-                                 onChange={(e) => setAccessSearch(e.target.value)} 
-                             />
-                        </div>
-                    </div>
-
-                    <div className="p-6 flex-1 overflow-y-auto space-y-2 pt-0">
-                        {filteredAccessTrials.length === 0 ? <div className="text-center py-10 text-slate-400 text-sm italic">No studies found.</div> : filteredAccessTrials.map(t => {
-                            const isChecked = tempSelectedTrials.includes(String(t.claim_id));
-                            return (
-                                <label 
-                                    key={t.claim_id} 
-                                    className={`flex items-center gap-4 p-4 rounded-xl border cursor-pointer transition-all duration-200 group ${isChecked ? 'bg-indigo-50/50 border-indigo-200 shadow-sm' : 'bg-white border-slate-200 hover:border-slate-300'}`}
-                                >
-                                    <div className={`w-5 h-5 rounded border flex items-center justify-center transition-colors ${isChecked ? 'bg-indigo-600 border-indigo-600 shadow-sm' : 'bg-white border-slate-300 group-hover:border-slate-400'}`}>
-                                        {isChecked && <Check className="h-3.5 w-3.5 text-white" />}
-                                    </div>
-                                    <input 
-                                        type="checkbox" 
-                                        className="hidden" 
-                                        checked={isChecked} 
-                                        onChange={() => handleCheckboxChange(String(t.claim_id))} 
-                                    />
-                                    <div className="flex-1">
-                                        <div className="text-sm font-bold text-slate-900">{t.title}</div>
-                                        <div className="text-xs text-slate-500 mt-0.5">{t.site_location?.city || "Remote"}</div>
-                                    </div>
-                                    {isChecked && (
-                                        <span className="flex items-center gap-1 text-[10px] font-bold text-indigo-700 bg-indigo-50 px-2.5 py-1 rounded-full border border-indigo-100 shadow-sm animate-in zoom-in">
-                                            Assigned
-                                        </span>
-                                    )}
-                                </label>
-                            );
-                        })}
-                    </div>
-                    <div className="p-6 border-t bg-slate-50 flex justify-end gap-3">
-                        <button 
-                            onClick={() => setIsAccessModalOpen(false)} 
-                            className="px-6 py-3 bg-white border border-slate-200 rounded-xl font-bold text-sm text-slate-600 hover:bg-slate-50 transition-colors"
-                        >
-                            Cancel
-                        </button>
-                        <button 
-                            onClick={savePermissions} 
-                            disabled={savingPermissions} 
-                            className="px-8 py-3 bg-slate-900 text-white rounded-xl font-bold text-sm hover:bg-slate-800 shadow-lg flex items-center gap-2 disabled:opacity-70 transition-all transform hover:-translate-y-0.5"
-                        >
-                            {savingPermissions && <Loader2 className="h-4 w-4 animate-spin" />} Save Changes
-                        </button>
-                    </div>
-                </div>
-            </div>
-        )}
-
-        {/* DELETE MODAL */}
-        {isDeleteModalOpen && (
-            <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-900/50 backdrop-blur-sm animate-in fade-in duration-200">
-                <div className="bg-white rounded-2xl p-6 w-full max-w-sm shadow-2xl text-center">
-                    <div className="w-14 h-14 bg-red-50 text-red-500 rounded-full flex items-center justify-center mx-auto mb-4">
-                        <AlertCircle className="h-7 w-7" />
-                    </div>
-                    <h3 className="text-lg font-bold text-slate-900 mb-2">Remove Member?</h3>
-                    <p className="text-sm text-slate-500 mb-6 leading-relaxed">
-                        Immediate access loss. This action cannot be undone.
+                    <h3 className="text-2xl font-black text-slate-900 mb-4 uppercase tracking-tight">
+                        {selectedMemberForStatus?.is_active ? 'Archive Staff?' : 'Restore Staff?'}
+                    </h3>
+                    <p className="text-sm font-medium text-slate-500 mb-10 leading-relaxed px-4">
+                        {selectedMemberForStatus?.is_active 
+                            ? 'They will lose access to the dashboard immediately.' 
+                            : 'They will regain access to their assigned protocols.'}
                     </p>
-                    <div className="flex gap-3">
+                    <div className="flex flex-col gap-4">
                         <button 
-                            onClick={() => setIsDeleteModalOpen(false)} 
-                            className="flex-1 py-2.5 border border-slate-200 rounded-xl font-bold text-sm text-slate-600 hover:bg-slate-50"
+                            onClick={toggleMemberActiveStatus} 
+                            disabled={isUpdatingStatus}
+                            className={`w-full py-5 rounded-[2rem] font-black text-xs uppercase tracking-widest shadow-xl transition-all active:scale-95 flex items-center justify-center gap-3 ${
+                                selectedMemberForStatus?.is_active ? 'bg-rose-600 text-white hover:bg-rose-700' : 'bg-indigo-600 text-white hover:bg-indigo-700'
+                            }`}
                         >
-                            Cancel
+                            {isUpdatingStatus ? <Loader2 className="h-4 w-4 animate-spin" /> : (selectedMemberForStatus?.is_active ? 'Confirm Archive' : 'Restore Access')}
                         </button>
-                        <button 
-                            onClick={confirmDelete} 
-                            className="flex-1 py-2.5 bg-red-600 text-white rounded-xl font-bold text-sm hover:bg-red-700 shadow-lg"
-                        >
-                            Remove
-                        </button>
+                        <button onClick={() => setIsStatusModalOpen(false)} className="w-full py-5 bg-slate-50 text-slate-400 rounded-[2rem] font-black text-xs uppercase tracking-widest hover:bg-slate-100 transition-colors">Cancel</button>
                     </div>
                 </div>
             </div>
