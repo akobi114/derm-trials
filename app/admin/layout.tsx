@@ -17,7 +17,7 @@ export default function AdminLayout({ children }: { children: React.ReactNode })
   const searchParams = useSearchParams();
   const activeTab = searchParams.get('tab') || 'lead_feed';
   
-  // New State for the Red Badge
+  // New State for the Red Badge display
   const [pendingCount, setPendingCount] = useState(0);
 
   useEffect(() => {
